@@ -23,6 +23,9 @@ const config = {
     token: process.env.DISCORD_TOKEN
 };
 
+// إضافة معرف المالك
+const BOT_OWNER_ID = '1423320282281676878';
+
 // ملف الإعدادات
 const SETTINGS_FILE = 'settings.json';
 
@@ -956,6 +959,171 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    // أمر إرسال رسالة للمالك (خاص بالمالك فقط)
+    if (command === 'broadcast' && message.author.id === BOT_OWNER_ID) {
+        const messageContent = args.join(' ');
+        
+        if (!messageContent) {
+            const errorMsg = await message.reply('❌ **يجب كتابة الرسالة!**\nمثال: `!broadcast هناك تحديث جديد للبوت...`');
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        // رسالة تأكيد
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('⚠️ تأكيد إرسال رسالة للجميع')
+            .setDescription(`**هل أنت متأكد من إرسال هذه الرسالة لجميع مالكي السيرفرات؟**\n\n${messageContent}`)
+            .addFields({
+                name: 'الإحصاءات',
+                value: `• عدد السيرفرات: ${client.guilds.cache.size}\n• العدد التقديري للأعضاء: ${client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0)}`
+            })
+            .setFooter({ text: 'اكتب "نعم" خلال 30 ثانية للمتابعة' });
+        
+        const confirmMessage = await message.reply({ embeds: [confirmEmbed] });
+        
+        const filter = m => m.author.id === BOT_OWNER_ID;
+        try {
+            const collected = await message.channel.awaitMessages({ 
+                filter, 
+                max: 1, 
+                time: 30000, 
+                errors: ['time'] 
+            });
+            
+            if (collected.first().content === 'نعم') {
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x3498db)
+                            .setTitle('📤 جاري الإرسال...')
+                            .setDescription('جاري إرسال الرسالة لجميع مالكي السيرفرات...')
+                            .setFooter({ text: 'قد يستغرق هذا بعض الوقت' })
+                    ]
+                });
+                
+                let successCount = 0;
+                let failCount = 0;
+                let totalServers = client.guilds.cache.size;
+                let current = 0;
+                
+                // إرسال لكل سيرفر
+                for (const guild of client.guilds.cache.values()) {
+                    current++;
+                    try {
+                        const owner = await guild.fetchOwner();
+                        if (owner && owner.user) {
+                            const broadcastEmbed = new EmbedBuilder()
+                                .setColor(0xFFFFFF)
+                                .setTitle('📢 إشعار من مالك بوت Sienna')
+                                .setDescription(messageContent)
+                                .addFields({
+                                    name: 'معلومات الإرسال',
+                                    value: `• السيرفر: ${guild.name}\n• التاريخ: ${new Date().toLocaleDateString('ar-SA')}\n• الوقت: ${new Date().toLocaleTimeString('ar-SA')}`
+                                })
+                                .setFooter({ 
+                                    text: `Sienna Support Bot | ${current}/${totalServers}`, 
+                                    iconURL: 'https://cdn.discordapp.com/attachments/your-image-url/sienna-icon.png' 
+                                })
+                                .setTimestamp();
+                            
+                            await owner.send({ embeds: [broadcastEmbed] });
+                            successCount++;
+                            console.log(`✅ تم إرسال رسالة لمالك ${guild.name} (${owner.user.tag})`);
+                        } else {
+                            failCount++;
+                        }
+                    } catch (error) {
+                        failCount++;
+                        console.log(`❌ فشل إرسال رسالة لمالك ${guild.name}:`, error.message);
+                    }
+                    
+                    // تحديث حالة الإرسال كل 5 سيرفرات
+                    if (current % 5 === 0 || current === totalServers) {
+                        await confirmMessage.edit({
+                            embeds: [
+                                new EmbedBuilder()
+                                    .setColor(0x3498db)
+                                    .setTitle('📤 جاري الإرسال...')
+                                    .setDescription(`جاري إرسال الرسالة لجميع مالكي السيرفرات...\n\n**التقدم:** ${current}/${totalServers}\n**الناجح:** ${successCount}\n**الفاشل:** ${failCount}`)
+                                    .setFooter({ text: 'قد يستغرق هذا بعض الوقت' })
+                            ]
+                        });
+                    }
+                }
+                
+                // النتيجة النهائية
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x2ecc71)
+                            .setTitle('✅ تم الإرسال بنجاح!')
+                            .setDescription(`**تم إرسال الرسالة بنجاح**\n\n${messageContent}`)
+                            .addFields(
+                                { name: '📊 النتائج', value: `• السيرفرات: ${totalServers}\n• الناجح: ${successCount}\n• الفاشل: ${failCount}`, inline: true },
+                                { name: '📈 النسبة', value: `• النجاح: ${Math.round((successCount / totalServers) * 100)}%\n• الفشل: ${Math.round((failCount / totalServers) * 100)}%`, inline: true }
+                            )
+                            .setFooter({ text: 'تم الإرسال بنجاح' })
+                            .setTimestamp()
+                    ]
+                });
+                
+                // مسح رسالة المستخدم بعد 20 ثانية
+                setTimeout(async () => {
+                    try {
+                        await message.delete();
+                        await confirmMessage.delete();
+                    } catch (error) {
+                        console.log('❌ لم أستطع حذف الرسائل');
+                    }
+                }, 20000);
+            } else {
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xf39c12)
+                            .setTitle('❌ تم إلغاء العملية')
+                            .setDescription('لم يتم إرسال الرسالة.')
+                    ]
+                });
+                
+                setTimeout(async () => {
+                    try {
+                        await confirmMessage.delete();
+                        await message.delete();
+                    } catch (error) {
+                        console.log('❌ لم أستطع حذف الرسائل');
+                    }
+                }, 10000);
+            }
+        } catch (error) {
+            await confirmMessage.edit({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x95a5a6)
+                        .setTitle('⏰ انتهى الوقت')
+                        .setDescription('لم يتم الرد في الوقت المحدد.')
+                ]
+            });
+            
+            setTimeout(async () => {
+                try {
+                    await confirmMessage.delete();
+                    await message.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 10000);
+        }
+        return;
+    }
+    
     // أمر المسح
     if (command === 'reset') {
         const confirmEmbed = new EmbedBuilder()
@@ -1433,35 +1601,63 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 client.on('guildCreate', async (guild) => {
     console.log(`➕ تم إضافة البوت لسيرفر جديد: ${guild.name} (${guild.id})`);
     
-    // إرسال رسالة ترحيب للإدمن
-    const admin = guild.members.cache.find(member => 
-        member.permissions.has(PermissionsBitField.Flags.Administrator)
+    // إرسال رسالة ترحيب لمالك السيرفر
+    try {
+        const owner = await guild.fetchOwner();
+        if (owner) {
+            const welcomeEmbed = new EmbedBuilder()
+                .setColor(0xFFFFFF) // لون أبيض
+                .setTitle('Holaa 👋🏻')
+                .setDescription('سهل بک في خدمات Sienna')
+                .addFields({
+                    name: ' ',
+                    value: 'لو عندك اقتراح او مشكلة في استخدام تواصل في سيرفر خاص بيذا :\n\nاتمني لك يوم سعيد'
+                })
+                .setThumbnail('https://cdn.discordapp.com/attachments/your-image-url/sienna-character.png') // صورة الشخصية
+                .setImage('https://cdn.discordapp.com/attachments/your-image-url/white-cloud.png') // صورة السحابة البيضاء
+                .setFooter({ 
+                    text: `Sienna Support Bot | ${new Date().toLocaleDateString('ar-SA')}`, 
+                    iconURL: 'https://cdn.discordapp.com/attachments/your-image-url/sienna-icon.png' 
+                })
+                .setTimestamp();
+
+            await owner.send({ embeds: [welcomeEmbed] });
+            console.log(`📩 تم إرسال رسالة ترحيب لمالك السيرفر: ${owner.user.tag}`);
+        }
+    } catch (error) {
+        console.log(`❌ لم أستطع إرسال رسالة ترحيب لمالك ${guild.name}:`, error.message);
+    }
+    
+    // إرسال رسالة ترحيب للإدمنز أيضاً
+    const admins = guild.members.cache.filter(member => 
+        member.permissions.has(PermissionsBitField.Flags.Administrator) && !member.user.bot
     );
     
-    if (admin) {
+    for (const admin of admins.values()) {
         try {
-            await admin.send({
-                embeds: [
-                    new EmbedBuilder()
-                        .setColor(0x3498db)
-                        .setTitle('👋 مرحباً بك في بوت الدعم الصوتي!')
-                        .setDescription(`**شكراً لإضافتك البوت إلى ${guild.name}**\n\nقبل البدء، يجب إعداد النظام أولاً.`)
-                        .addFields({
-                            name: '📝 **الخطوات المطلوبة:**',
-                            value: `
+            if (admin.id !== guild.ownerId) { // تجنب إرسال مزدوج للمالك
+                const helpEmbed = new EmbedBuilder()
+                    .setColor(0x3498db)
+                    .setTitle('👋 مرحباً بك في بوت الدعم الصوتي Sienna!')
+                    .setDescription(`**شكراً لإضافتك البوت إلى ${guild.name}**\n\nقبل البدء، يجب إعداد النظام أولاً.`)
+                    .addFields({
+                        name: '📝 **الخطوات المطلوبة:**',
+                        value: `
 1. \`${prefix}setup category <ID_التصنيف>\`
 2. \`${prefix}setup voice <ID_روم_الصوت>\`
 3. \`${prefix}setup text <ID_روم_النص>\`
 4. \`${prefix}setup role <ID_الرتبة>\`
 
 بعدها النظام يصبح جاهزاً للعمل!
-                            `
-                        })
-                        .setFooter({ text: 'استخدم !help لعرض كل الأوامر' })
-                ]
-            });
+                        `
+                    })
+                    .setFooter({ text: 'استخدم !help لعرض كل الأوامر' });
+                
+                await admin.send({ embeds: [helpEmbed] });
+                console.log(`📩 تم إرسال رسالة ترحيب للإدمن: ${admin.user.tag}`);
+            }
         } catch (error) {
-            console.log(`❌ لم أستطع إرسال رسالة ترحيب في ${guild.name}`);
+            // تجاهل الخطأ إذا لم نستطع إرسال
         }
     }
 });
