@@ -1021,7 +1021,7 @@ client.on('messageCreate', async (message) => {
                         if (owner && owner.user) {
                             const broadcastEmbed = new EmbedBuilder()
                                 .setColor(0xFFFFFF)
-                                .setTitle('📢 إشعار من مالك بوت Sienna')
+                                .setTitle('  ^_^ إشعار من مالك بوت Sienna')
                                 .setDescription(messageContent)
                                 .addFields({
                                     name: 'معلومات الإرسال',
@@ -1607,14 +1607,14 @@ client.on('guildCreate', async (guild) => {
         if (owner) {
             const welcomeEmbed = new EmbedBuilder()
                 .setColor(0xFFFFFF) // لون أبيض
-                .setTitle('Holaa 👋🏻')
-                .setDescription('سهل بک في خدمات Sienna')
+                .setTitle('Holaa :> ')
+                .setDescription('اهلا بك في خدمات Seinna ')
                 .addFields({
                     name: ' ',
-                    value: 'لو عندك اقتراح او مشكلة في استخدام تواصل في سيرفر خاص بيذا :\n\nاتمني لك يوم سعيد'
+                    value: 'Enjoy→⋰⋱⋮ لو عندك اقتراح او مشكله في استخدام تواصل في سيرفر خاص بينا :> اتمني لك يوم سعيد'
                 })
-                .setThumbnail('https://cdn.discordapp.com/attachments/your-image-url/sienna-character.png') // صورة الشخصية
-                .setImage('https://cdn.discordapp.com/attachments/your-image-url/white-cloud.png') // صورة السحابة البيضاء
+                .setThumbnail('https://cdn.discordapp.com/attachments/1449057765397106830/1459265177634472030/411ae22d8fafaff224ec5ac9132c6315.jpg?ex=6988e19a&is=6987901a&hm=ba4473e52872b443be130848372e4f532a503fb3d1fd8a74b6304f11138a8802&') // صورة الشخصية
+                .setImage('https://cdn.discordapp.com/attachments/1449057765397106830/1459265170584109067/8ed9b44c0b845fd2d1b092949bc83411.jpg?ex=6988e198&is=69879018&hm=dac64949ef27d220b4b158da6fb85278bfb534329938ce554e438114cb8e2b44&') // صورة السحابة البيضاء
                 .setFooter({ 
                     text: `Sienna Support Bot | ${new Date().toLocaleDateString('ar-SA')}`, 
                     iconURL: 'https://cdn.discordapp.com/attachments/your-image-url/sienna-icon.png' 
