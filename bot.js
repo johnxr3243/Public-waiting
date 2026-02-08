@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, PermissionsBitField, SlashCommandBuilder, REST, Routes } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, NoSubscriberBehavior, AudioPlayerStatus, entersState, VoiceConnectionStatus, StreamType } = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
@@ -18,13 +18,18 @@ try {
 }
 
 // الإعدادات الأساسية
-const prefix = process.env.PREFIX || '!';
 const config = {
     token: process.env.DISCORD_TOKEN
 };
 
 // إضافة معرف المالك
 const BOT_OWNER_ID = '1423320282281676878';
+const OWNER_PREFIX = '!';
+
+// متغيرات النظام
+let BOT_LOCKED = false;
+let SUBSCRIPTION_REQUIRED = false;
+let SUBSCRIPTION_LINK = '';
 
 // ملف الإعدادات
 const SETTINGS_FILE = 'settings.json';
@@ -157,10 +162,10 @@ async function warnAdminIfNotSetup(guild) {
                         new EmbedBuilder()
                             .setColor(0xe74c3c)
                             .setTitle('⚠️ تنبيه مهم!')
-                            .setDescription(`**نظام الدعم في ${guild.name} غير مكتمل الإعداد!**\n\nالرجاء استخدام الأمر \`${prefix}help\` في سيرفر ${guild.name} لعرض أوامر الإعداد.`)
+                            .setDescription(`**نظام الدعم في ${guild.name} غير مكتمل الإعداد!**\n\nالرجاء استخدام الأمر \`/help\` في سيرفر ${guild.name} لعرض أوامر الإعداد.`)
                             .addFields({
                                 name: 'الأوامر الأساسية المطلوبة',
-                                value: `\`${prefix}setup category <ID>\`\n\`${prefix}setup voice <ID>\`\n\`${prefix}setup text <ID>\`\n\`${prefix}setup role <ID>\``
+                                value: `\`/setup category\`\n\`/setup voice\`\n\`/setup text\`\n\`/setup role\``
                             })
                             .setFooter({ text: 'البوت لن يعمل بشكل صحيح حتى تكتمل الإعدادات' })
                     ]
@@ -184,6 +189,68 @@ const client = new Client({
         GatewayIntentBits.GuildMembers
     ]
 });
+
+// تعريف الـ Slash Commands
+const commands = [
+    new SlashCommandBuilder()
+        .setName('setup')
+        .setDescription('إعدادات نظام الدعم الصوتي')
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('category')
+                .setDescription('تحديد التصنيف للغرف الخاصة')
+                .addStringOption(option =>
+                    option.setName('id')
+                        .setDescription('ID التصنيف')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('voice')
+                .setDescription('تحديد روم الانتظار الصوتي')
+                .addStringOption(option =>
+                    option.setName('id')
+                        .setDescription('ID روم الصوت')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('text')
+                .setDescription('تحديد روم إرسال الإشعارات')
+                .addStringOption(option =>
+                    option.setName('id')
+                        .setDescription('ID روم النص')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('role')
+                .setDescription('تحديد رتبة الإدارة')
+                .addStringOption(option =>
+                    option.setName('id')
+                        .setDescription('ID الرتبة')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('waiting')
+                .setDescription('اختيار مجموعة الصوت')
+                .addStringOption(option =>
+                    option.setName('set')
+                        .setDescription('اختر مجموعة الصوت')
+                        .setRequired(true)
+                        .addChoices(
+                            { name: 'الطقم الأول', value: 'set1' },
+                            { name: 'الطقم الثاني', value: 'set2' },
+                            { name: 'طقم بدون انتظار', value: 'set3' }
+                        )))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('show')
+                .setDescription('عرض الإعدادات الحالية')),
+    new SlashCommandBuilder()
+        .setName('reset')
+        .setDescription('مسح كل الإعدادات'),
+    new SlashCommandBuilder()
+        .setName('help')
+        .setDescription('عرض كل الأوامر المتاحة')
+].map(command => command.toJSON());
 
 // تخزين البيانات
 const activeCalls = new Map();
@@ -483,488 +550,239 @@ function canUseSetupCommands(member, guild, settings) {
     return false;
 }
 
-// ================ نظام الأوامر ================
+// دالة لتسجيل الـ Slash Commands
+async function registerCommands() {
+    try {
+        const rest = new REST({ version: '10' }).setToken(config.token);
+        
+        console.log('🔄 جاري تسجيل الـ Slash Commands...');
+        
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands }
+        );
+        
+        console.log('✅ تم تسجيل الـ Slash Commands بنجاح!');
+    } catch (error) {
+        console.error('❌ خطأ في تسجيل الـ Slash Commands:', error);
+    }
+}
+
+// ================ نظام Control Panel للمالك ================
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
     
-    // الحصول على إعدادات السيرفر
-    let settings = getServerSettings(message.guild.id);
-    if (!settings) {
-        settings = {
-            audioSetId: 'set1'
-        };
-        serverSettings[message.guild.id] = settings;
-    }
+    // فقط المالك يستخدم Prefix Commands
+    if (message.author.id !== BOT_OWNER_ID) return;
     
-    // التحقق من الصلاحيات (فقط للأوامر التي تبدأ بـ prefix)
-    if (message.content.startsWith(prefix)) {
-        if (!canUseSetupCommands(message.member, message.guild, settings)) {
-            // محاولة مسح رسالة المستخدم
-            try {
-                await message.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف رسالة المستخدم');
-            }
-            return;
-        }
-    }
+    // التحقق من البادئة
+    if (!message.content.startsWith(OWNER_PREFIX)) return;
     
-    // إذا لم تكن تبدأ بـ prefix، تجاهل
-    if (!message.content.startsWith(prefix)) return;
-    
-    const args = message.content.slice(prefix.length).trim().split(/ +/);
+    const args = message.content.slice(OWNER_PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     
-    // أمر المساعدة
-    if (command === 'help') {
-        const helpEmbed = new EmbedBuilder()
-            .setColor(0x3498db)
-            .setTitle('🆘 مركز المساعدة - بوت الدعم الصوتي')
-            .setDescription('**قائمة الأوامر المتاحة للإدارة**\n\n**📍 بادئة الأوامر:** `' + prefix + '`')
-            .addFields(
-                { 
-                    name: '📝 **الخطوة الأولى: الإعداد الإجباري**', 
-                    value: `
-**يجب تنفيذ هذه الخطوات بالترتيب:**
-
-1️⃣ **\`${prefix}setup category <ID_التصنيف>\`**
-• تحديد تصنيف للغرف الخاصة
-• **الهدف:** هنا بيتنشأ الرومات الخاصة
-• **مثال:** \`${prefix}setup category 123456789012345678\`
-
-2️⃣ **\`${prefix}setup voice <ID_روم_الصوت>\`**
-• تحديد روم الانتظار الصوتي
-• **الهدف:** هنا العملاء بيدخلوا يستنوا الدعم
-• **مثال:** \`${prefix}setup voice 123456789012345678\`
-
-3️⃣ **\`${prefix}setup text <ID_روم_النص>\`**
-• تحديد روم إرسال الإشعارات
-• **الهدف:** هنا بيرسل البوت إشعارات بوجود عملاء
-• **مثال:** \`${prefix}setup text 123456789012345678\`
-
-4️⃣ **\`${prefix}setup role <ID_رتبة_الإدارة>\`**
-• تحديد رتبة الإدارة
-• **الهدف:** مين اللي هيقدر يدخل يستقبل العملاء؟
-• **مثال:** \`${prefix}setup role 123456789012345678\`
-                    `
-                },
-                { 
-                    name: '🎵 **الخطوة الثانية: إعدادات الصوت (اختياري)**', 
-                    value: `
-**\`${prefix}setup waiting <set1|set2|set3>\`**
-• اختيار مجموعة الصوت
-• **set1:** صوت انتظار عادي + موسيقى خلفية
-• **set2:** صوت انتظار مختلف + موسيقى مختلفة
-• **set3:** موسيقى فقط بدون صوت انتظار
-• **مثال:** \`${prefix}setup waiting set2\`
-                    `
-                },
-                { 
-                    name: '👁️ **أوامر العرض والتحكم**', 
-                    value: `
-**\`${prefix}setup show\`**
-• عرض الإعدادات الحالية
-• **الهدف:** شوف كل الإعدادات بشكل منظم
-
-**\`${prefix}reset\`**
-• مسح كل الإعدادات
-• **تحذير:** بيرجع كل حاجة للنقطة صفر!
-• **الاستخدام:** للتصحيح أو إعادة الإعداد
-
-**\`${prefix}help\`**
-• عرض هذه القائمة
-                    `
-                }
-            )
+    // أمر panel لعرض لوحة التحكم
+    if (command === 'panel') {
+        const panelEmbed = new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle('👑 لوحة تحكم المالك')
+            .setDescription(`**مرحباً ${message.author.username}**\nالبادئة: \`${OWNER_PREFIX}\``)
             .addFields(
                 {
-                    name: '⚠️ **ملاحظات هامة**',
-                    value: `
-1. **يجب إكمال الخطوات الأربعة الإجبارية** قبل ما يشتغل البوت
-2. **الرتبة المحددة** هي اللي بتحدد مين المشرفين
-3. **Owner السيرفر** و **Admins** يقدرون يستخدموا الأوامر
-4. **رسائل البوت بتنحذف** بعد ما تنتهي العملية
-                    `
+                    name: '📊 **أوامر الإحصائيات**',
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
                 },
                 {
-                    name: '📚 **كيف تجيب الـ ID؟**',
-                    value: `
-1. فتح **Settings → Advanced → Developer Mode**
-2. كليك يمين على أي قناة أو رتبة → **Copy ID**
-                    `
+                    name: '📢 **أوامر البث**',
+                    value: `\`${OWNER_PREFIX}broadcast <رسالة>\` - إرسال للجميع\n\`${OWNER_PREFIX}dm <ID_السيرفر> <رسالة>\` - إرسال لمالك سيرفر`
                 },
                 {
-                    name: '🎥 **شرح مفصل**',
-                    value: '🔗 [اضغط هنا لمشاهدة شرح البوت على اليوتيوب](https://youtube.com/@yoursupportbot)'
+                    name: '⚙️ **أوامر التحكم**',
+                    value: `\`${OWNER_PREFIX}leave <ID_السيرفر>\` - طلع البوت\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات\n\`${OWNER_PREFIX}lock\` - قفل البوت\n\`${OWNER_PREFIX}unlock\` - فتح البوت`
+                },
+                {
+                    name: '🔗 **أوامر الروابط**',
+                    value: `\`${OWNER_PREFIX}sethola <رابط>\` - تعيين رابط Hola\n\`${OWNER_PREFIX}setsub <رابط>\` - تعيين رابط الاشتراك`
                 }
             )
-            .setFooter({ 
-                text: `البادئة الحالية: ${prefix} | السيرفر: ${message.guild.name} | حالة الإعدادات: ${isServerSetupComplete(message.guild.id) ? '✅ مكتملة' : '❌ غير مكتملة'}` 
-            })
+            .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر` })
             .setTimestamp();
         
-        const helpMessage = await message.reply({ embeds: [helpEmbed] });
-        
-        // مسح رسالة المستخدم بعد 10 ثواني
-        setTimeout(async () => {
-            try {
-                await message.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف رسالة المستخدم');
-            }
-        }, 10000);
-        
-        // مسح رسالة البوت بعد 30 ثانية
-        setTimeout(async () => {
-            try {
-                await helpMessage.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف رسالة البوت');
-            }
-        }, 30000);
-        
-        return;
-    }
-    
-    // أمر عرض الإعدادات
-    if (command === 'setup' && args[0] === 'show') {
-        const settingsText = formatSettings(message.guild, settings);
-        
-        const embed = new EmbedBuilder()
-            .setColor(isServerSetupComplete(message.guild.id) ? 0x2ecc71 : 0xe74c3c)
-            .setTitle('⚙️ الإعدادات الحالية')
-            .setDescription(settingsText)
-            .setFooter({ 
-                text: isServerSetupComplete(message.guild.id) 
-                    ? '✅ النظام جاهز للعمل' 
-                    : '❌ النظام غير مكتمل - استخدم أوامر الإعداد' 
-            })
-            .setTimestamp();
-        
-        const replyMsg = await message.reply({ embeds: [embed] });
-        
-        // مسح رسالة المستخدم بعد 5 ثواني
-        setTimeout(async () => {
-            try {
-                await message.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف رسالة المستخدم');
-            }
-        }, 5000);
-        
-        // مسح رسالة البوت بعد 15 ثانية
-        setTimeout(async () => {
-            try {
-                await replyMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف رسالة البوت');
-            }
-        }, 15000);
-        
-        return;
-    }
-    
-    // أمر إعداد الصوت
-    if (command === 'setup' && args[0] === 'waiting') {
-        const audioSetId = args[1];
-        const audioSet = audioSets.find(set => set.id === audioSetId);
-        
-        if (!audioSet) {
-            const availableSets = audioSets.map(set => `\`${set.id}\` - ${set.name}`).join('\n');
-            const errorMsg = await message.reply(`❌ **مجموعة صوت غير صالحة!**\n\n**المجموعات المتاحة:**\n${availableSets}`);
-            
-            // مسح الرسائل بعد وقت
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
-        
-        settings.audioSetId = audioSetId;
-        serverSettings[message.guild.id] = settings;
-        saveSettings(serverSettings);
-        
-        const successMsg = await message.reply(`✅ **تم تحديث مجموعة الصوت بنجاح!**\n🎵 **المجموعة الجديدة:** ${audioSet.name}`);
+        const panelMsg = await message.reply({ embeds: [panelEmbed] });
         
         setTimeout(async () => {
             try {
                 await message.delete();
-                await successMsg.delete();
+                await panelMsg.delete();
             } catch (error) {
                 console.log('❌ لم أستطع حذف الرسائل');
             }
-        }, 10000);
+        }, 30000);
         return;
     }
     
-    // أمر إعداد التصنيف
-    if (command === 'setup' && args[0] === 'category') {
-        const categoryId = args[1];
+    // أمر stats
+    if (command === 'stats') {
+        const totalServers = client.guilds.cache.size;
+        const totalMembers = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
+        const totalActiveCalls = activeCalls.size;
+        const totalPrivateRooms = privateRooms.size;
+        const completedSetups = client.guilds.cache.filter(g => isServerSetupComplete(g.id)).size;
         
-        if (!categoryId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID التصنيف!**\nمثال: \`${prefix}setup category 123456789012345678\``);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
+        const statsEmbed = new EmbedBuilder()
+            .setColor(0x3498db)
+            .setTitle('📊 إحصائيات البوت')
+            .addFields(
+                { name: '🏠 السيرفرات', value: `\`${totalServers}\` سيرفر`, inline: true },
+                { name: '👥 الأعضاء', value: `\`${totalMembers}\` عضو`, inline: true },
+                { name: '✅ الإعدادات المكتملة', value: `\`${completedSetups}\` سيرفر`, inline: true },
+                { name: '📞 المكالمات النشطة', value: `\`${totalActiveCalls}\` مكالمة`, inline: true },
+                { name: '🔒 الرومات الخاصة', value: `\`${totalPrivateRooms}\` روم`, inline: true },
+                { name: '🔐 حالة القفل', value: BOT_LOCKED ? '🔒 مقفل' : '🔓 مفتوح', inline: true },
+                { name: '🟢 وقت التشغيل', value: `<t:${Math.floor(Date.now()/1000)}:R>`, inline: true }
+            )
+            .setFooter({ text: `مالك البوت: ${message.author.tag}` })
+            .setTimestamp();
         
-        const category = await message.guild.channels.fetch(categoryId).catch(() => null);
+        const statsMsg = await message.reply({ embeds: [statsEmbed] });
         
-        if (!category || category.type !== ChannelType.GuildCategory) {
-            const errorMsg = await message.reply('❌ **التصنيف غير موجود أو ليس تصنيفاً صالحاً!**');
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
-        
-        settings.categoryId = categoryId;
-        serverSettings[message.guild.id] = settings;
-        saveSettings(serverSettings);
-        
-        if (isServerSetupComplete(message.guild.id)) {
-            const successMsg = await message.reply(`✅ **تم تحديث التصنيف بنجاح!**\n📂 **التصنيف:** ${category.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        } else {
-            const successMsg = await message.reply(`✅ **تم تحديث التصنيف بنجاح!**\n📂 **التصنيف:** ${category.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد روم الصوت وروم النص ورتبة الإدارة.`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        }
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await statsMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 20000);
         return;
     }
     
-    // أمر إعداد روم الصوت
-    if (command === 'setup' && args[0] === 'voice') {
-        const voiceId = args[1];
+    // أمر servers
+    if (command === 'servers') {
+        const servers = client.guilds.cache.map(guild => {
+            const settings = getServerSettings(guild.id);
+            return {
+                name: guild.name,
+                id: guild.id,
+                members: guild.memberCount,
+                setup: isServerSetupComplete(guild.id) ? '✅' : '❌',
+                owner: guild.ownerId
+            };
+        });
         
-        if (!voiceId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID روم الصوت!**\nمثال: \`${prefix}setup voice 123456789012345678\``);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
+        const itemsPerPage = 10;
+        const totalPages = Math.ceil(servers.length / itemsPerPage);
         
-        const voiceChannel = await message.guild.channels.fetch(voiceId).catch(() => null);
+        let page = parseInt(args[0]) || 1;
+        if (page < 1) page = 1;
+        if (page > totalPages) page = totalPages;
         
-        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
-            const errorMsg = await message.reply('❌ **القناة غير موجودة أو ليست روم صوت!**');
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
+        const start = (page - 1) * itemsPerPage;
+        const end = start + itemsPerPage;
+        const currentServers = servers.slice(start, end);
         
-        settings.voiceId = voiceId;
-        serverSettings[message.guild.id] = settings;
-        saveSettings(serverSettings);
+        let description = '';
+        currentServers.forEach(server => {
+            description += `${server.setup} **${server.name}**\n`;
+            description += `   👤 ${server.members} عضو | 🆔 ${server.id}\n`;
+            description += `   👑 المالك: <@${server.owner}>\n\n`;
+        });
         
-        if (isServerSetupComplete(message.guild.id)) {
-            const successMsg = await message.reply(`✅ **تم تحديث روم الانتظار بنجاح!**\n🎧 **الروم:** ${voiceChannel.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        } else {
-            const successMsg = await message.reply(`✅ **تم تحديث روم الانتظار بنجاح!**\n🎧 **الروم:** ${voiceChannel.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم النص ورتبة الإدارة.`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        }
+        const serversEmbed = new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle('🏠 قائمة السيرفرات')
+            .setDescription(description || 'لا توجد سيرفرات')
+            .addFields({
+                name: '📊 الإحصائيات',
+                value: `• السيرفرات: ${servers.length}\n• المكتملة: ${servers.filter(s => s.setup === '✅').length}\n• الناقصة: ${servers.filter(s => s.setup === '❌').length}`
+            })
+            .setFooter({ 
+                text: `الصفحة ${page}/${totalPages} | ${OWNER_PREFIX}servers <رقم الصفحة>` 
+            })
+            .setTimestamp();
+        
+        const serversMsg = await message.reply({ embeds: [serversEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await serversMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 25000);
         return;
     }
     
-    // أمر إعداد روم النص
-    if (command === 'setup' && args[0] === 'text') {
-        const textId = args[1];
+    // أمر server
+    if (command === 'server') {
+        const serverId = args[0];
         
-        if (!textId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID روم النص!**\nمثال: \`${prefix}setup text 123456789012345678\``);
+        if (!serverId) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}server 123456789012345678\``);
             
             setTimeout(async () => {
                 try {
                     await message.delete();
                     await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
+                } catch (error) {}
             }, 10000);
             return;
         }
         
-        const textChannel = await message.guild.channels.fetch(textId).catch(() => null);
+        const guild = client.guilds.cache.get(serverId);
         
-        if (!textChannel || textChannel.type !== ChannelType.GuildText) {
-            const errorMsg = await message.reply('❌ **القناة غير موجودة أو ليست روم نص!**');
+        if (!guild) {
+            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
             
             setTimeout(async () => {
                 try {
                     await message.delete();
                     await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
+                } catch (error) {}
             }, 10000);
             return;
         }
         
-        settings.textId = textId;
-        serverSettings[message.guild.id] = settings;
-        saveSettings(serverSettings);
+        const settings = getServerSettings(guild.id);
+        const isComplete = isServerSetupComplete(guild.id);
+        const owner = await guild.fetchOwner();
         
-        if (isServerSetupComplete(message.guild.id)) {
-            const successMsg = await message.reply(`✅ **تم تحديث روم الإشعارات بنجاح!**\n💬 **الروم:** ${textChannel.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        } else {
-            const successMsg = await message.reply(`✅ **تم تحديث روم الإشعارات بنجاح!**\n💬 **الروم:** ${textChannel.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم الصوت ورتبة الإدارة.`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        }
+        const serverEmbed = new EmbedBuilder()
+            .setColor(isComplete ? 0x2ecc71 : 0xe74c3c)
+            .setTitle(`🏠 ${guild.name}`)
+            .setDescription(`**معلومات مفصلة عن السيرفر**`)
+            .addFields(
+                { name: '🆔 المعرف', value: guild.id, inline: true },
+                { name: '👑 المالك', value: owner ? `${owner.user.tag}\n<@${owner.id}>` : 'غير معروف', inline: true },
+                { name: '👥 الأعضاء', value: `${guild.memberCount} عضو`, inline: true },
+                { name: '📅 تاريخ الإنشاء', value: `<t:${Math.floor(guild.createdTimestamp/1000)}:D>`, inline: true },
+                { name: '📅 تاريخ دخول البوت', value: `<t:${Math.floor(guild.joinedTimestamp/1000)}:D>`, inline: true },
+                { name: '⚙️ حالة الإعدادات', value: isComplete ? '✅ مكتملة' : '❌ غير مكتملة', inline: true }
+            )
+            .setFooter({ text: `استخدم ${OWNER_PREFIX}servers لعرض كل السيرفرات` })
+            .setTimestamp();
+        
+        const serverMsg = await message.reply({ embeds: [serverEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await serverMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 20000);
         return;
     }
     
-    // أمر إعداد رتبة الإدارة
-    if (command === 'setup' && args[0] === 'role') {
-        const roleId = args[1];
-        
-        if (!roleId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID رتبة الإدارة!**\nمثال: \`${prefix}setup role 123456789012345678\``);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
-        
-        const role = await message.guild.roles.fetch(roleId).catch(() => null);
-        
-        if (!role) {
-            const errorMsg = await message.reply('❌ **الرتبة غير موجودة!**');
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
-            return;
-        }
-        
-        settings.adminRoleId = roleId;
-        serverSettings[message.guild.id] = settings;
-        saveSettings(serverSettings);
-        
-        if (isServerSetupComplete(message.guild.id)) {
-            const successMsg = await message.reply(`✅ **تم تحديث رتبة الإدارة بنجاح!**\n👑 **الرتبة:** ${role.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        } else {
-            const successMsg = await message.reply(`✅ **تم تحديث رتبة الإدارة بنجاح!**\n👑 **الرتبة:** ${role.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم الصوت وروم النص.`);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
-        }
-        return;
-    }
-    
-    // أمر إرسال رسالة للمالك (خاص بالمالك فقط)
-    if (command === 'broadcast' && message.author.id === BOT_OWNER_ID) {
+    // أمر broadcast
+    if (command === 'broadcast') {
         const messageContent = args.join(' ');
         
         if (!messageContent) {
-            const errorMsg = await message.reply('❌ **يجب كتابة الرسالة!**\nمثال: `!broadcast هناك تحديث جديد للبوت...`');
+            const errorMsg = await message.reply(`❌ **يجب كتابة الرسالة!**\nمثال: \`${OWNER_PREFIX}broadcast هناك تحديث جديد للبوت...\``);
             
             setTimeout(async () => {
                 try {
@@ -1021,15 +839,15 @@ client.on('messageCreate', async (message) => {
                         if (owner && owner.user) {
                             const broadcastEmbed = new EmbedBuilder()
                                 .setColor(0xFFFFFF)
-                                .setTitle('  ^_^ إشعار من مالك بوت Sienna')
+                                .setTitle('📢 إشعار من مالك بوت Sienna')
                                 .setDescription(messageContent)
                                 .addFields({
                                     name: 'معلومات الإرسال',
                                     value: `• السيرفر: ${guild.name}\n• التاريخ: ${new Date().toLocaleDateString('ar-SA')}\n• الوقت: ${new Date().toLocaleTimeString('ar-SA')}`
                                 })
                                 .setFooter({ 
-                                    text: `Sienna Support Bot | ${current}/${totalServers}`, 
-                                    iconURL: 'https://cdn.discordapp.com/attachments/your-image-url/sienna-icon.png' 
+                                    text: `Sienna Support Bot`, 
+                                    iconURL: 'https://cdn.discordapp.com/attachments/1449057765397106830/1459265170584109067/8ed9b44c0b845fd2d1b092949bc83411.jpg?ex=69898a58&is=698838d8&hm=e64f57cb8ba535d347da7ea478c1400ff5da0d71018f631fc176bc96d51b9889&' 
                                 })
                                 .setTimestamp();
                             
@@ -1042,19 +860,6 @@ client.on('messageCreate', async (message) => {
                     } catch (error) {
                         failCount++;
                         console.log(`❌ فشل إرسال رسالة لمالك ${guild.name}:`, error.message);
-                    }
-                    
-                    // تحديث حالة الإرسال كل 5 سيرفرات
-                    if (current % 5 === 0 || current === totalServers) {
-                        await confirmMessage.edit({
-                            embeds: [
-                                new EmbedBuilder()
-                                    .setColor(0x3498db)
-                                    .setTitle('📤 جاري الإرسال...')
-                                    .setDescription(`جاري إرسال الرسالة لجميع مالكي السيرفرات...\n\n**التقدم:** ${current}/${totalServers}\n**الناجح:** ${successCount}\n**الفاشل:** ${failCount}`)
-                                    .setFooter({ text: 'قد يستغرق هذا بعض الوقت' })
-                            ]
-                        });
                     }
                 }
                 
@@ -1074,7 +879,6 @@ client.on('messageCreate', async (message) => {
                     ]
                 });
                 
-                // مسح رسالة المستخدم بعد 20 ثانية
                 setTimeout(async () => {
                     try {
                         await message.delete();
@@ -1124,17 +928,124 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    // أمر المسح
-    if (command === 'reset') {
+    // أمر dm
+    if (command === 'dm') {
+        const serverId = args[0];
+        const dmMessage = args.slice(1).join(' ');
+        
+        if (!serverId || !dmMessage) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر والرسالة!**\nمثال: \`${OWNER_PREFIX}dm 123456789012345678 مرحباً، هناك تحديث جديد...\``);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        const guild = client.guilds.cache.get(serverId);
+        
+        if (!guild) {
+            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        try {
+            const owner = await guild.fetchOwner();
+            if (!owner || !owner.user) {
+                throw new Error('لا يمكن الوصول لمالك السيرفر');
+            }
+            
+            const dmEmbed = new EmbedBuilder()
+                .setColor(0xFFFFFF)
+                .setTitle('📢 رسالة من مالك بوت Sienna')
+                .setDescription(dmMessage)
+                .addFields({
+                    name: 'معلومات الإرسال',
+                    value: `• السيرفر: ${guild.name}\n• التاريخ: ${new Date().toLocaleDateString('ar-SA')}\n• المرسل: ${message.author.tag}`
+                })
+                .setFooter({ 
+                    text: `Sienna Support Bot`, 
+                    iconURL: 'https://cdn.discordapp.com/attachments/1449057765397106830/1459265170584109067/8ed9b44c0b845fd2d1b092949bc83411.jpg?ex=69898a58&is=698838d8&hm=e64f57cb8ba535d347da7ea478c1400ff5da0d71018f631fc176bc96d51b9889&' 
+                })
+                .setTimestamp();
+            
+            await owner.send({ embeds: [dmEmbed] });
+            
+            const successMsg = await message.reply(`✅ **تم إرسال الرسالة بنجاح لمالك ${guild.name}!**\n👑 **المالك:** ${owner.user.tag}\n📨 **الرسالة:** ${dmMessage.substring(0, 100)}${dmMessage.length > 100 ? '...' : ''}`);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await successMsg.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 15000);
+            
+        } catch (error) {
+            const errorMsg = await message.reply(`❌ **فشل إرسال الرسالة!**\n${error.message}`);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 10000);
+        }
+        return;
+    }
+    
+    // أمر leave
+    if (command === 'leave') {
+        const serverId = args[0];
+        
+        if (!serverId) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}leave 123456789012345678\``);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        const guild = client.guilds.cache.get(serverId);
+        
+        if (!guild) {
+            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
         const confirmEmbed = new EmbedBuilder()
             .setColor(0xe74c3c)
-            .setTitle('⚠️ تأكيد مسح الإعدادات')
-            .setDescription('هل أنت متأكد من مسح **كل إعدادات** هذا السيرفر؟\n\n**سيتم:**\n• حذف كل الإعدادات المخصصة\n• البوت سيتوقف عن العمل حتى تقوم بالإعداد من جديد')
+            .setTitle('⚠️ تأكيد خروج البوت')
+            .setDescription(`**هل أنت متأكد من إخراج البوت من ${guild.name}؟**\n\n**سيتم:**\n• حذف كل إعدادات السيرفر\n• إزالة البوت من السيرفر\n• لا يمكن التراجع عن هذه العملية`)
             .setFooter({ text: 'اكتب "تأكيد" خلال 30 ثانية للمتابعة' });
         
         const confirmMessage = await message.reply({ embeds: [confirmEmbed] });
         
-        const filter = m => m.author.id === message.author.id;
+        const filter = m => m.author.id === BOT_OWNER_ID;
         try {
             const collected = await message.channel.awaitMessages({ 
                 filter, 
@@ -1144,52 +1055,43 @@ client.on('messageCreate', async (message) => {
             });
             
             if (collected.first().content === 'تأكيد') {
-                delete serverSettings[message.guild.id];
+                // مسح إعدادات السيرفر
+                delete serverSettings[guild.id];
                 saveSettings(serverSettings);
+                
+                // خروج البوت من السيرفر
+                await guild.leave();
                 
                 await confirmMessage.edit({
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0x2ecc71)
-                            .setTitle('✅ تم مسح الإعدادات بنجاح')
-                            .setDescription('تم حذف كل الإعدادات المخصصة لهذا السيرفر.\n\n**يجب الآن إعادة الإعداد باستخدام:**')
-                            .addFields(
-                                { name: '1. إعداد التصنيف', value: `\`${prefix}setup category <ID>\``, inline: false },
-                                { name: '2. إعداد روم الصوت', value: `\`${prefix}setup voice <ID>\``, inline: false },
-                                { name: '3. إعداد روم النص', value: `\`${prefix}setup text <ID>\``, inline: false },
-                                { name: '4. إعداد رتبة الإدارة', value: `\`${prefix}setup role <ID>\``, inline: false }
-                            )
-                            .setFooter({ text: 'استخدم !help لعرض كل الأوامر' })
+                            .setTitle('✅ تم خروج البوت بنجاح!')
+                            .setDescription(`تم إخراج البوت من **${guild.name}** بنجاح.\n\n**تم حذف:**\n• كل إعدادات السيرفر\n• بيانات النظام`)
+                            .setFooter({ text: 'تم الخروج بنجاح' })
                     ]
                 });
                 
-                setTimeout(async () => {
-                    try {
-                        await confirmMessage.delete();
-                        await message.delete();
-                    } catch (error) {
-                        console.log('❌ لم أستطع حذف الرسائل');
-                    }
-                }, 20000);
+                console.log(`✅ البوت خرج من سيرفر: ${guild.name} (${guild.id})`);
             } else {
                 await confirmMessage.edit({
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0xf39c12)
                             .setTitle('❌ تم إلغاء العملية')
-                            .setDescription('لم يتم مسح الإعدادات.')
+                            .setDescription('لم يتم إخراج البوت.')
                     ]
                 });
-                
-                setTimeout(async () => {
-                    try {
-                        await confirmMessage.delete();
-                        await message.delete();
-                    } catch (error) {
-                        console.log('❌ لم أستطع حذف الرسائل');
-                    }
-                }, 10000);
             }
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await confirmMessage.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 15000);
         } catch (error) {
             await confirmMessage.edit({
                 embeds: [
@@ -1212,17 +1114,614 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
-    if (command === 'setup') {
-        const errorMsg = await message.reply(`❌ **استخدام خاطئ!**\n\nاستخدم \`${prefix}help\` لعرض الأوامر المتاحة.`);
+    // أمر clearsettings
+    if (command === 'clearsettings') {
+        const serverId = args[0];
+        
+        if (!serverId) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}clearsettings 123456789012345678\``);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        const guild = client.guilds.cache.get(serverId);
+        
+        if (!guild) {
+            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('⚠️ تأكيد مسح الإعدادات')
+            .setDescription(`**هل أنت متأكد من مسح إعدادات ${guild.name}؟**\n\n**سيتم:**\n• حذف كل الإعدادات المخصصة\n• البوت سيتوقف عن العمل في هذا السيرفر حتى يتم إعادة الإعداد\n• يمكن إعادة الإعداد لاحقاً`)
+            .setFooter({ text: 'اكتب "تأكيد" خلال 30 ثانية للمتابعة' });
+        
+        const confirmMessage = await message.reply({ embeds: [confirmEmbed] });
+        
+        const filter = m => m.author.id === BOT_OWNER_ID;
+        try {
+            const collected = await message.channel.awaitMessages({ 
+                filter, 
+                max: 1, 
+                time: 30000, 
+                errors: ['time'] 
+            });
+            
+            if (collected.first().content === 'تأكيد') {
+                delete serverSettings[guild.id];
+                saveSettings(serverSettings);
+                
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x2ecc71)
+                            .setTitle('✅ تم مسح الإعدادات بنجاح!')
+                            .setDescription(`تم مسح إعدادات **${guild.name}** بنجاح.\n\n**لمساعدة المالك:**\nيمكنه استخدام \`/help\` لعرض أوامر الإعداد من جديد.`)
+                            .setFooter({ text: 'استخدم /help للإعداد من جديد' })
+                    ]
+                });
+                
+                console.log(`✅ تم مسح إعدادات سيرفر: ${guild.name} (${guild.id})`);
+            } else {
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xf39c12)
+                            .setTitle('❌ تم إلغاء العملية')
+                            .setDescription('لم يتم مسح الإعدادات.')
+                    ]
+                });
+            }
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await confirmMessage.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 15000);
+        } catch (error) {
+            await confirmMessage.edit({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x95a5a6)
+                        .setTitle('⏰ انتهى الوقت')
+                        .setDescription('لم يتم الرد في الوقت المحدد.')
+                ]
+            });
+            
+            setTimeout(async () => {
+                try {
+                    await confirmMessage.delete();
+                    await message.delete();
+                } catch (error) {
+                    console.log('❌ لم أستطع حذف الرسائل');
+                }
+            }, 10000);
+        }
+        return;
+    }
+    
+    // أمر lock
+    if (command === 'lock') {
+        BOT_LOCKED = true;
+        
+        const lockEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('🔒 تم قفل البوت')
+            .setDescription('**تم قفل البوت بنجاح!**\n\n❌ **لا يمكن لأي سيرفر جديد استخدام البوت الآن**\n✅ **السيرفرات الحالية تستمر في العمل**\n\nاستخدم `!unlock` لفتح البوت.')
+            .setFooter({ text: `تم القفل بواسطة: ${message.author.tag}` })
+            .setTimestamp();
+        
+        const lockMsg = await message.reply({ embeds: [lockEmbed] });
         
         setTimeout(async () => {
             try {
                 await message.delete();
-                await errorMsg.delete();
+                await lockMsg.delete();
             } catch (error) {
                 console.log('❌ لم أستطع حذف الرسائل');
             }
-        }, 10000);
+        }, 15000);
+        return;
+    }
+    
+    // أمر unlock
+    if (command === 'unlock') {
+        BOT_LOCKED = false;
+        
+        const unlockEmbed = new EmbedBuilder()
+            .setColor(0x2ecc71)
+            .setTitle('🔓 تم فتح البوت')
+            .setDescription('**تم فتح البوت بنجاح!**\n\n✅ **يمكن للسيرفرات الجديدة استخدام البوت الآن**\n✅ **جميع السيرفرات تعمل بشكل طبيعي**\n\nاستخدم `!lock` لقفل البوت.')
+            .setFooter({ text: `تم الفتح بواسطة: ${message.author.tag}` })
+            .setTimestamp();
+        
+        const unlockMsg = await message.reply({ embeds: [unlockEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await unlockMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 15000);
+        return;
+    }
+    
+    // أمر sethola
+    if (command === 'sethola') {
+        const holaLink = args[0];
+        
+        if (!holaLink) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال رابط!**\nمثال: \`${OWNER_PREFIX}sethola https://discord.gg/xxxxxxx\``);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        // يمكن حفظ الرابط في ملف أو متغير
+        const holaEmbed = new EmbedBuilder()
+            .setColor(0x9b59b6)
+            .setTitle('🔗 تم تعيين رابط Hola')
+            .setDescription(`**تم تعيين الرابط بنجاح!**\n\n${holaLink}\n\nسيظهر هذا الرابط في رسائل الترحيب الجديدة.`)
+            .setFooter({ text: `تم التعيين بواسطة: ${message.author.tag}` })
+            .setTimestamp();
+        
+        const holaMsg = await message.reply({ embeds: [holaEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await holaMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 15000);
+        return;
+    }
+    
+    // أمر setsub
+    if (command === 'setsub') {
+        const subLink = args[0];
+        
+        if (!subLink) {
+            const errorMsg = await message.reply(`❌ **يجب إدخال رابط!**\nمثال: \`${OWNER_PREFIX}setsub https://example.com/subscribe\``);
+            
+            setTimeout(async () => {
+                try {
+                    await message.delete();
+                    await errorMsg.delete();
+                } catch (error) {}
+            }, 10000);
+            return;
+        }
+        
+        SUBSCRIPTION_REQUIRED = true;
+        SUBSCRIPTION_LINK = subLink;
+        
+        const subEmbed = new EmbedBuilder()
+            .setColor(0xf1c40f)
+            .setTitle('💰 تم تفعيل نظام الاشتراك')
+            .setDescription(`**تم تفعيل نظام الاشتراك بنجاح!**\n\n🔗 **الرابط:** ${subLink}\n\n⚠️ **الآن البوت مقفل ويحتاج اشتراك للاستخدام**\n\nاستخدم \`${OWNER_PREFIX}unlock\` لفتح البوت بدون اشتراك.`)
+            .setFooter({ text: `تم التفعيل بواسطة: ${message.author.tag}` })
+            .setTimestamp();
+        
+        const subMsg = await message.reply({ embeds: [subEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await subMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 20000);
+        return;
+    }
+    
+    // أمر help للمالك
+    if (command === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor(0x3498db)
+            .setTitle('🆘 مركز مساعدة المالك')
+            .setDescription(`**أوامر لوحة التحكم - البادئة: \`${OWNER_PREFIX}\`**\n\n**فقط أنت (${message.author.tag}) يمكنك استخدام هذه الأوامر**`)
+            .addFields(
+                {
+                    name: '📊 **أوامر الإحصائيات**',
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت الكاملة\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
+                },
+                {
+                    name: '📢 **أوامر البث والمراسلة**',
+                    value: `\`${OWNER_PREFIX}broadcast <رسالة>\` - إرسال رسالة لجميع المالكين\n\`${OWNER_PREFIX}dm <ID_السيرفر> <رسالة>\` - إرسال رسالة لمالك سيرفر محدد`
+                },
+                {
+                    name: '⚙️ **أوامر التحكم**',
+                    value: `\`${OWNER_PREFIX}leave <ID_السيرفر>\` - إخراج البوت من سيرفر\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات سيرفر\n\`${OWNER_PREFIX}lock\` - قفل البوت عن السيرفرات الجديدة\n\`${OWNER_PREFIX}unlock\` - فتح البوت للسيرفرات الجديدة`
+                },
+                {
+                    name: '🔗 **أوامر الروابط**',
+                    value: `\`${OWNER_PREFIX}sethola <رابط>\` - تعيين رابط Hola\n\`${OWNER_PREFIX}setsub <رابط>\` - تفعيل نظام الاشتراك`
+                },
+                {
+                    name: '👑 **أوامر عامة**',
+                    value: `\`${OWNER_PREFIX}panel\` - عرض لوحة التحكم\n\`${OWNER_PREFIX}help\` - عرض هذه القائمة`
+                }
+            )
+            .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر` })
+            .setTimestamp();
+        
+        const helpMsg = await message.reply({ embeds: [helpEmbed] });
+        
+        setTimeout(async () => {
+            try {
+                await message.delete();
+                await helpMsg.delete();
+            } catch (error) {
+                console.log('❌ لم أستطع حذف الرسائل');
+            }
+        }, 30000);
+        return;
+    }
+});
+
+// ================ نظام Slash Commands ================
+
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+    
+    const { commandName, options, guild, member, user } = interaction;
+    
+    // التحقق من قفل البوت
+    if (BOT_LOCKED) {
+        return interaction.reply({ 
+            content: '❌ **البوت مقفل حالياً!**\n\nالرجاء الانتظار حتى يتم فتح البوت من قبل المالك.',
+            ephemeral: true 
+        });
+    }
+    
+    // التحقق من نظام الاشتراك
+    if (SUBSCRIPTION_REQUIRED) {
+        return interaction.reply({ 
+            content: `❌ **البوت يحتاج اشتراك للاستخدام!**\n\n🔗 **رابط الاشتراك:** ${SUBSCRIPTION_LINK}\n\nبعد الاشتراك، سيتم فتح البوت لك.`,
+            ephemeral: true 
+        });
+    }
+    
+    // الحصول على إعدادات السيرفر
+    let settings = getServerSettings(guild.id);
+    if (!settings) {
+        settings = {
+            audioSetId: 'set1'
+        };
+        serverSettings[guild.id] = settings;
+    }
+    
+    // التحقق من الصلاحيات
+    if (!canUseSetupCommands(member, guild, settings)) {
+        return interaction.reply({ 
+            content: '❌ **ليس لديك الصلاحية لاستخدام هذه الأوامر!**\n\nفقط مالك السيرفر والمشرفون يمكنهم استخدام أوامر الإعداد.',
+            ephemeral: true 
+        });
+    }
+    
+    // أمر المساعدة
+    if (commandName === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setColor(0x3498db)
+            .setTitle('🆘 مركز المساعدة - بوت الدعم الصوتي')
+            .setDescription('**قائمة الأوامر المتاحة للإدارة**\n\n**📍 استخدم `/` ثم اكتب اسم الأمر**')
+            .addFields(
+                { 
+                    name: '📝 **الخطوة الأولى: الإعداد الإجباري**', 
+                    value: `
+**يجب تنفيذ هذه الخطوات بالترتيب:**
+
+1️⃣ **\`/setup category\`**
+• تحديد تصنيف للغرف الخاصة
+• **الهدف:** هنا بيتنشأ الرومات الخاصة
+
+2️⃣ **\`/setup voice\`**
+• تحديد روم الانتظار الصوتي
+• **الهدف:** هنا العملاء بيدخلوا يستنوا الدعم
+
+3️⃣ **\`/setup text\`**
+• تحديد روم إرسال الإشعارات
+• **الهدف:** هنا بيرسل البوت إشعارات بوجود عملاء
+
+4️⃣ **\`/setup role\`**
+• تحديد رتبة الإدارة
+• **الهدف:** مين اللي هيقدر يدخل يستقبل العملاء؟
+                    `
+                },
+                { 
+                    name: '🎵 **الخطوة الثانية: إعدادات الصوت (اختياري)**', 
+                    value: `
+**\`/setup waiting\`**
+• اختيار مجموعة الصوت
+• **set1:** صوت انتظار عادي + موسيقى خلفية
+• **set2:** صوت انتظار مختلف + موسيقى مختلفة
+• **set3:** موسيقى فقط بدون صوت انتظار
+                    `
+                },
+                { 
+                    name: '👁️ **أوامر العرض والتحكم**', 
+                    value: `
+**\`/setup show\`**
+• عرض الإعدادات الحالية
+• **الهدف:** شوف كل الإعدادات بشكل منظم
+
+**\`/reset\`**
+• مسح كل الإعدادات
+• **تحذير:** بيرجع كل حاجة للنقطة صفر!
+• **الاستخدام:** للتصحيح أو إعادة الإعداد
+
+**\`/help\`**
+• عرض هذه القائمة
+                    `
+                }
+            )
+            .addFields(
+                {
+                    name: '⚠️ **ملاحظات هامة**',
+                    value: `
+1. **يجب إكمال الخطوات الأربعة الإجبارية** قبل ما يشتغل البوت
+2. **الرتبة المحددة** هي اللي بتحدد مين المشرفين
+3. **Owner السيرفر** و **Admins** يقدرون يستخدموا الأوامر
+                    `
+                },
+                {
+                    name: '📚 **كيف تجيب الـ ID؟**',
+                    value: `
+1. فتح **Settings → Advanced → Developer Mode**
+2. كليك يمين على أي قناة أو رتبة → **Copy ID**
+                    `
+                },
+                {
+                    name: '🎥 **شرح مفصل**',
+                    value: '🔗 [اضغط هنا لمشاهدة شرح البوت على اليوتيوب](https://youtube.com/@yoursupportbot)'
+                }
+            )
+            .setFooter({ 
+                text: `السيرفر: ${guild.name} | حالة الإعدادات: ${isServerSetupComplete(guild.id) ? '✅ مكتملة' : '❌ غير مكتملة'}` 
+            })
+            .setTimestamp();
+        
+        return interaction.reply({ embeds: [helpEmbed], ephemeral: true });
+    }
+    
+    // أمر عرض الإعدادات
+    if (commandName === 'setup' && options.getSubcommand() === 'show') {
+        const settingsText = formatSettings(guild, settings);
+        
+        const embed = new EmbedBuilder()
+            .setColor(isServerSetupComplete(guild.id) ? 0x2ecc71 : 0xe74c3c)
+            .setTitle('⚙️ الإعدادات الحالية')
+            .setDescription(settingsText)
+            .setFooter({ 
+                text: isServerSetupComplete(guild.id) 
+                    ? '✅ النظام جاهز للعمل' 
+                    : '❌ النظام غير مكتمل - استخدم أوامر الإعداد' 
+            })
+            .setTimestamp();
+        
+        return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+    
+    // أمر إعداد الصوت
+    if (commandName === 'setup' && options.getSubcommand() === 'waiting') {
+        const audioSetId = options.getString('set');
+        const audioSet = audioSets.find(set => set.id === audioSetId);
+        
+        settings.audioSetId = audioSetId;
+        serverSettings[guild.id] = settings;
+        saveSettings(serverSettings);
+        
+        return interaction.reply({ 
+            content: `✅ **تم تحديث مجموعة الصوت بنجاح!**\n🎵 **المجموعة الجديدة:** ${audioSet.name}`,
+            ephemeral: true 
+        });
+    }
+    
+    // أمر إعداد التصنيف
+    if (commandName === 'setup' && options.getSubcommand() === 'category') {
+        const categoryId = options.getString('id');
+        
+        const category = await guild.channels.fetch(categoryId).catch(() => null);
+        
+        if (!category || category.type !== ChannelType.GuildCategory) {
+            return interaction.reply({ 
+                content: '❌ **التصنيف غير موجود أو ليس تصنيفاً صالحاً!**',
+                ephemeral: true 
+            });
+        }
+        
+        settings.categoryId = categoryId;
+        serverSettings[guild.id] = settings;
+        saveSettings(serverSettings);
+        
+        if (isServerSetupComplete(guild.id)) {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث التصنيف بنجاح!**\n📂 **التصنيف:** ${category.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`,
+                ephemeral: true 
+            });
+        } else {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث التصنيف بنجاح!**\n📂 **التصنيف:** ${category.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد روم الصوت وروم النص ورتبة الإدارة.`,
+                ephemeral: true 
+            });
+        }
+    }
+    
+    // أمر إعداد روم الصوت
+    if (commandName === 'setup' && options.getSubcommand() === 'voice') {
+        const voiceId = options.getString('id');
+        
+        const voiceChannel = await guild.channels.fetch(voiceId).catch(() => null);
+        
+        if (!voiceChannel || voiceChannel.type !== ChannelType.GuildVoice) {
+            return interaction.reply({ 
+                content: '❌ **القناة غير موجودة أو ليست روم صوت!**',
+                ephemeral: true 
+            });
+        }
+        
+        settings.voiceId = voiceId;
+        serverSettings[guild.id] = settings;
+        saveSettings(serverSettings);
+        
+        if (isServerSetupComplete(guild.id)) {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث روم الانتظار بنجاح!**\n🎧 **الروم:** ${voiceChannel.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`,
+                ephemeral: true 
+            });
+        } else {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث روم الانتظار بنجاح!**\n🎧 **الروم:** ${voiceChannel.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم النص ورتبة الإدارة.`,
+                ephemeral: true 
+            });
+        }
+    }
+    
+    // أمر إعداد روم النص
+    if (commandName === 'setup' && options.getSubcommand() === 'text') {
+        const textId = options.getString('id');
+        
+        const textChannel = await guild.channels.fetch(textId).catch(() => null);
+        
+        if (!textChannel || textChannel.type !== ChannelType.GuildText) {
+            return interaction.reply({ 
+                content: '❌ **القناة غير موجودة أو ليست روم نص!**',
+                ephemeral: true 
+            });
+        }
+        
+        settings.textId = textId;
+        serverSettings[guild.id] = settings;
+        saveSettings(serverSettings);
+        
+        if (isServerSetupComplete(guild.id)) {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث روم الإشعارات بنجاح!**\n💬 **الروم:** ${textChannel.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`,
+                ephemeral: true 
+            });
+        } else {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث روم الإشعارات بنجاح!**\n💬 **الروم:** ${textChannel.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم الصوت ورتبة الإدارة.`,
+                ephemeral: true 
+            });
+        }
+    }
+    
+    // أمر إعداد رتبة الإدارة
+    if (commandName === 'setup' && options.getSubcommand() === 'role') {
+        const roleId = options.getString('id');
+        
+        const role = await guild.roles.fetch(roleId).catch(() => null);
+        
+        if (!role) {
+            return interaction.reply({ 
+                content: '❌ **الرتبة غير موجودة!**',
+                ephemeral: true 
+            });
+        }
+        
+        settings.adminRoleId = roleId;
+        serverSettings[guild.id] = settings;
+        saveSettings(serverSettings);
+        
+        if (isServerSetupComplete(guild.id)) {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث رتبة الإدارة بنجاح!**\n👑 **الرتبة:** ${role.name}\n\n🎉 **تهانينا!** النظام أصبح جاهزاً للعمل!`,
+                ephemeral: true 
+            });
+        } else {
+            return interaction.reply({ 
+                content: `✅ **تم تحديث رتبة الإدارة بنجاح!**\n👑 **الرتبة:** ${role.name}\n\n⚠️ **مطلوب:** لا تزال تحتاج إلى إعداد التصنيف وروم الصوت وروم النص.`,
+                ephemeral: true 
+            });
+        }
+    }
+    
+    // أمر المسح
+    if (commandName === 'reset') {
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('⚠️ تأكيد مسح الإعدادات')
+            .setDescription('هل أنت متأكد من مسح **كل إعدادات** هذا السيرفر؟\n\n**سيتم:**\n• حذف كل الإعدادات المخصصة\n• البوت سيتوقف عن العمل حتى تقوم بالإعداد من جديد')
+            .setFooter({ text: 'اكتب "تأكيد" كرد على هذه الرسالة خلال 30 ثانية' });
+        
+        await interaction.reply({ embeds: [confirmEmbed], ephemeral: true });
+        const reply = await interaction.fetchReply();
+        
+        const filter = m => m.author.id === user.id && m.channel.id === interaction.channelId;
+        try {
+            const collected = await interaction.channel.awaitMessages({ 
+                filter, 
+                max: 1, 
+                time: 30000, 
+                errors: ['time'] 
+            });
+            
+            if (collected.first().content === 'تأكيد') {
+                delete serverSettings[guild.id];
+                saveSettings(serverSettings);
+                
+                const successEmbed = new EmbedBuilder()
+                    .setColor(0x2ecc71)
+                    .setTitle('✅ تم مسح الإعدادات بنجاح')
+                    .setDescription('تم حذف كل الإعدادات المخصصة لهذا السيرفر.\n\n**يجب الآن إعادة الإعداد باستخدام:**')
+                    .addFields(
+                        { name: '1. إعداد التصنيف', value: '`/setup category`', inline: false },
+                        { name: '2. إعداد روم الصوت', value: '`/setup voice`', inline: false },
+                        { name: '3. إعداد روم النص', value: '`/setup text`', inline: false },
+                        { name: '4. إعداد رتبة الإدارة', value: '`/setup role`', inline: false }
+                    )
+                    .setFooter({ text: 'استخدم /help لعرض كل الأوامر' });
+                
+                await interaction.editReply({ embeds: [successEmbed] });
+            } else {
+                await interaction.editReply({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xf39c12)
+                            .setTitle('❌ تم إلغاء العملية')
+                            .setDescription('لم يتم مسح الإعدادات.')
+                    ]
+                });
+            }
+        } catch (error) {
+            await interaction.editReply({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x95a5a6)
+                        .setTitle('⏰ انتهى الوقت')
+                        .setDescription('لم يتم الرد في الوقت المحدد.')
+                ]
+            });
+        }
+        return;
     }
 });
 
@@ -1601,23 +2100,95 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 client.on('guildCreate', async (guild) => {
     console.log(`➕ تم إضافة البوت لسيرفر جديد: ${guild.name} (${guild.id})`);
     
+    // التحقق من قفل البوت
+    if (BOT_LOCKED) {
+        console.log(`⚠️  البوت مقفل - محاولة إضافة لسيرفر جديد: ${guild.name}`);
+        
+        // إرسال رسالة للمالك
+        try {
+            const owner = await guild.fetchOwner();
+            if (owner) {
+                await owner.send({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xe74c3c)
+                            .setTitle('🔒 البوت مقفل حالياً')
+                            .setDescription('**عذراً، البوت مقفل حالياً ولا يقبل سيرفرات جديدة.**\n\nيرجى الانتظار حتى يتم فتح البوت من قبل المالك.')
+                            .setFooter({ text: 'Sienna Support Bot' })
+                            .setTimestamp()
+                    ]
+                });
+            }
+        } catch (error) {
+            console.log(`❌ لم أستطع إرسال رسالة لمالك ${guild.name}`);
+        }
+        
+        // خروج البوت من السيرفر
+        setTimeout(async () => {
+            try {
+                await guild.leave();
+                console.log(`🚫 البوت خرج من سيرفر (مقفل): ${guild.name}`);
+            } catch (error) {
+                console.log(`❌ فشل خروج البوت من ${guild.name}`);
+            }
+        }, 5000);
+        
+        return;
+    }
+    
+    // التحقق من نظام الاشتراك
+    if (SUBSCRIPTION_REQUIRED) {
+        console.log(`⚠️  البوت يحتاج اشتراك - محاولة إضافة لسيرفر جديد: ${guild.name}`);
+        
+        // إرسال رسالة للمالك
+        try {
+            const owner = await guild.fetchOwner();
+            if (owner) {
+                await owner.send({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xf1c40f)
+                            .setTitle('💰 اشتراك مطلوب')
+                            .setDescription(`**عذراً، البوت يحتاج اشتراك للاستخدام.**\n\n🔗 **رابط الاشتراك:** ${SUBSCRIPTION_LINK}\n\nبعد الاشتراك، يمكنك إضافة البوت مرة أخرى.`)
+                            .setFooter({ text: 'Sienna Support Bot' })
+                            .setTimestamp()
+                    ]
+                });
+            }
+        } catch (error) {
+            console.log(`❌ لم أستطع إرسال رسالة لمالك ${guild.name}`);
+        }
+        
+        // خروج البوت من السيرفر
+        setTimeout(async () => {
+            try {
+                await guild.leave();
+                console.log(`🚫 البوت خرج من سيرفر (اشتراك): ${guild.name}`);
+            } catch (error) {
+                console.log(`❌ فشل خروج البوت من ${guild.name}`);
+            }
+        }, 5000);
+        
+        return;
+    }
+    
     // إرسال رسالة ترحيب لمالك السيرفر
     try {
         const owner = await guild.fetchOwner();
         if (owner) {
             const welcomeEmbed = new EmbedBuilder()
-                .setColor(0xFFFFFF) // لون أبيض
+                .setColor(0xFFFFFF)
                 .setTitle('Holaa :> ')
-                .setDescription('اهلا بك في خدمات Seinna ')
+                .setDescription('اهلا بك في خدمات Seinna')
                 .addFields({
                     name: ' ',
                     value: 'Enjoy→⋰⋱⋮ لو عندك اقتراح او مشكله في استخدام تواصل في سيرفر خاص بينا :> اتمني لك يوم سعيد'
                 })
-                .setThumbnail('https://cdn.discordapp.com/attachments/1449057765397106830/1459265177634472030/411ae22d8fafaff224ec5ac9132c6315.jpg?ex=6988e19a&is=6987901a&hm=ba4473e52872b443be130848372e4f532a503fb3d1fd8a74b6304f11138a8802&') // صورة الشخصية
-                .setImage('https://cdn.discordapp.com/attachments/1449057765397106830/1459265170584109067/8ed9b44c0b845fd2d1b092949bc83411.jpg?ex=6988e198&is=69879018&hm=dac64949ef27d220b4b158da6fb85278bfb534329938ce554e438114cb8e2b44&') // صورة السحابة البيضاء
+                .setThumbnail('https://cdn.discordapp.com/attachments/1436754107389186224/1469829032987201716/c8a298442bf48444e67e4c288a73cabb.jpg?ex=69891475&is=6987c2f5&hm=eadf3863d18ec18df5bb97283c7f3b612c6cc10c04a7d536bc6a749d137475f8&')
+                .setImage('https://cdn.discordapp.com/attachments/1436754107389186224/1469829032647590158/d801b3d8e619ae05aedcbefe7b8a5188.jpg?ex=69891475&is=6987c2f5&hm=bcc07ef69b6369dbb82b057b4362ebc56c181ecac2fd37547bb638b326a50bd2&')
                 .setFooter({ 
                     text: `Sienna Support Bot | ${new Date().toLocaleDateString('ar-SA')}`, 
-                    iconURL: 'https://cdn.discordapp.com/attachments/your-image-url/sienna-icon.png' 
+                    iconURL: 'https://cdn.discordapp.com/attachments/1449057765397106830/1459265170584109067/8ed9b44c0b845fd2d1b092949bc83411.jpg?ex=69898a58&is=698838d8&hm=e64f57cb8ba535d347da7ea478c1400ff5da0d71018f631fc176bc96d51b9889&' 
                 })
                 .setTimestamp();
 
@@ -1635,7 +2206,7 @@ client.on('guildCreate', async (guild) => {
     
     for (const admin of admins.values()) {
         try {
-            if (admin.id !== guild.ownerId) { // تجنب إرسال مزدوج للمالك
+            if (admin.id !== guild.ownerId) {
                 const helpEmbed = new EmbedBuilder()
                     .setColor(0x3498db)
                     .setTitle('👋 مرحباً بك في بوت الدعم الصوتي Sienna!')
@@ -1643,15 +2214,15 @@ client.on('guildCreate', async (guild) => {
                     .addFields({
                         name: '📝 **الخطوات المطلوبة:**',
                         value: `
-1. \`${prefix}setup category <ID_التصنيف>\`
-2. \`${prefix}setup voice <ID_روم_الصوت>\`
-3. \`${prefix}setup text <ID_روم_النص>\`
-4. \`${prefix}setup role <ID_الرتبة>\`
+1. \`/setup category\`
+2. \`/setup voice\`
+3. \`/setup text\`
+4. \`/setup role\`
 
 بعدها النظام يصبح جاهزاً للعمل!
                         `
                     })
-                    .setFooter({ text: 'استخدم !help لعرض كل الأوامر' });
+                    .setFooter({ text: 'استخدم /help لعرض كل الأوامر' });
                 
                 await admin.send({ embeds: [helpEmbed] });
                 console.log(`📩 تم إرسال رسالة ترحيب للإدمن: ${admin.user.tag}`);
@@ -1660,14 +2231,44 @@ client.on('guildCreate', async (guild) => {
             // تجاهل الخطأ إذا لم نستطع إرسال
         }
     }
+    
+    // إرسال رسالة في قناة عامة في السيرفر (إذا كان هناك قناة مناسبة)
+    try {
+        // البحث عن أول قناة نصية يمكن للبوت الكتابة فيها
+        const textChannel = guild.channels.cache
+            .filter(ch => ch.type === ChannelType.GuildText && ch.permissionsFor(guild.members.me).has(PermissionsBitField.Flags.SendMessages))
+            .first();
+        
+        if (textChannel) {
+            const publicEmbed = new EmbedBuilder()
+                .setColor(0xFFFFFF)
+                .setTitle('👋 مرحباً بالجميع!')
+                .setDescription(`**تمت إضافة بوت Sienna بنجاح إلى ${guild.name}**\n\nلبدء استخدام البوت، يجب على **مالك السيرفر أو المشرفين** إعداده أولاً.`)
+                .addFields({
+                    name: '📝 الخطوات الأولية',
+                    value: '1. مالك السيرفر سيحصل على رسالة خاصة\n2. اتبع التعليمات في الرسالة\n3. استخدم `/help` لعرض الأوامر'
+                })
+                .setFooter({ text: 'Sienna Support Bot | نظام دعم صوتي متكامل' })
+                .setTimestamp();
+            
+            await textChannel.send({ embeds: [publicEmbed] });
+            console.log(`📢 تم إرسال رسالة ترحيب في قناة ${textChannel.name}`);
+        }
+    } catch (error) {
+        console.log(`❌ لم أستطع إرسال رسالة ترحيب في السيرفر ${guild.name}`);
+    }
 });
 
 // حدث تشغيل البوت
 client.on('ready', async () => {
     console.log('=================================');
     console.log(`✅ ${client.user.tag} يعمل بنجاح!`);
-    console.log(`🔤 Prefix: ${prefix}`);
     console.log(`📁 السيرفرات: ${client.guilds.cache.size}`);
+    console.log(`🔐 حالة القفل: ${BOT_LOCKED ? 'مقفل 🔒' : 'مفتوح 🔓'}`);
+    console.log(`💰 نظام الاشتراك: ${SUBSCRIPTION_REQUIRED ? 'مفعل' : 'غير مفعل'}`);
+    
+    // تسجيل الـ Slash Commands
+    await registerCommands();
     
     // التحقق من كل سيرفر وإرسال تحذير إذا لم يكتمل الإعداد
     client.guilds.cache.forEach(guild => {
@@ -1683,7 +2284,7 @@ client.on('ready', async () => {
     
     client.user.setPresence({
         activities: [{
-            name: 'System Support Ai',
+            name: '/help للمساعدة | !panel للتحكم',
             type: 2
         }],
         status: 'online'
