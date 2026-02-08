@@ -28,8 +28,6 @@ const OWNER_PREFIX = '!';
 
 // متغيرات النظام
 let BOT_LOCKED = false;
-let SUBSCRIPTION_REQUIRED = false;
-let SUBSCRIPTION_LINK = '';
 
 // ملف الإعدادات
 const SETTINGS_FILE = 'settings.json';
@@ -586,12 +584,12 @@ client.on('messageCreate', async (message) => {
     if (command === 'panel') {
         const panelEmbed = new EmbedBuilder()
             .setColor(0x9b59b6)
-            .setTitle('👑 لوحة تحكم المالك')
+            .setTitle('👑 لوحة تحكم المالك - بدون حذف تلقائي')
             .setDescription(`**مرحباً ${message.author.username}**\nالبادئة: \`${OWNER_PREFIX}\``)
             .addFields(
                 {
                     name: '📊 **أوامر الإحصائيات**',
-                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات (مع ID السيرفر ومالكه)\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
                 },
                 {
                     name: '📢 **أوامر البث**',
@@ -599,26 +597,17 @@ client.on('messageCreate', async (message) => {
                 },
                 {
                     name: '⚙️ **أوامر التحكم**',
-                    value: `\`${OWNER_PREFIX}leave <ID_السيرفر>\` - طلع البوت\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات\n\`${OWNER_PREFIX}lock\` - قفل البوت\n\`${OWNER_PREFIX}unlock\` - فتح البوت`
+                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - طلع البوت\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات`
                 },
                 {
-                    name: '🔗 **أوامر الروابط**',
-                    value: `\`${OWNER_PREFIX}sethola <رابط>\` - تعيين رابط Hola\n\`${OWNER_PREFIX}setsub <رابط>\` - تعيين رابط الاشتراك`
+                    name: '👑 **أوامر عامة**',
+                    value: `\`${OWNER_PREFIX}panel\` - عرض هذه اللوحة\n\`${OWNER_PREFIX}help\` - المساعدة`
                 }
             )
-            .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر` })
+            .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر\nالرسالة ماتحذفش تلقائياً - انت قرر متى تحذفها` })
             .setTimestamp();
         
-        const panelMsg = await message.reply({ embeds: [panelEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await panelMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 30000);
+        await message.reply({ embeds: [panelEmbed] });
         return;
     }
     
@@ -630,31 +619,26 @@ client.on('messageCreate', async (message) => {
         const totalPrivateRooms = privateRooms.size;
         const completedSetups = client.guilds.cache.filter(g => isServerSetupComplete(g.id)).size;
         
+        // السيرفرات المقفلة
+        const lockedServers = serverSettings.lockedServers || [];
+        const activeLocked = lockedServers.filter(id => client.guilds.cache.has(id)).length;
+        
         const statsEmbed = new EmbedBuilder()
             .setColor(0x3498db)
             .setTitle('📊 إحصائيات البوت')
             .addFields(
                 { name: '🏠 السيرفرات', value: `\`${totalServers}\` سيرفر`, inline: true },
-                { name: '👥 الأعضاء', value: `\`${totalMembers}\` عضو`, inline: true },
+                { name: '👥 الأعضاء', value: `\`${totalMembers.toLocaleString()}\` عضو`, inline: true },
                 { name: '✅ الإعدادات المكتملة', value: `\`${completedSetups}\` سيرفر`, inline: true },
                 { name: '📞 المكالمات النشطة', value: `\`${totalActiveCalls}\` مكالمة`, inline: true },
                 { name: '🔒 الرومات الخاصة', value: `\`${totalPrivateRooms}\` روم`, inline: true },
-                { name: '🔐 حالة القفل', value: BOT_LOCKED ? '🔒 مقفل' : '🔓 مفتوح', inline: true },
+                { name: '🚫 السيرفرات المقفلة', value: `\`${activeLocked}\` سيرفر`, inline: true },
                 { name: '🟢 وقت التشغيل', value: `<t:${Math.floor(Date.now()/1000)}:R>`, inline: true }
             )
             .setFooter({ text: `مالك البوت: ${message.author.tag}` })
             .setTimestamp();
         
-        const statsMsg = await message.reply({ embeds: [statsEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await statsMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 20000);
+        await message.reply({ embeds: [statsEmbed] });
         return;
     }
     
@@ -662,16 +646,20 @@ client.on('messageCreate', async (message) => {
     if (command === 'servers') {
         const servers = client.guilds.cache.map(guild => {
             const settings = getServerSettings(guild.id);
+            const lockedServers = serverSettings.lockedServers || [];
+            const isLocked = lockedServers.includes(guild.id);
+            
             return {
                 name: guild.name,
                 id: guild.id,
                 members: guild.memberCount,
                 setup: isServerSetupComplete(guild.id) ? '✅' : '❌',
-                owner: guild.ownerId
+                owner: guild.ownerId,
+                locked: isLocked ? '🔒' : '🔓'
             };
         });
         
-        const itemsPerPage = 10;
+        const itemsPerPage = 8;
         const totalPages = Math.ceil(servers.length / itemsPerPage);
         
         let page = parseInt(args[0]) || 1;
@@ -682,36 +670,31 @@ client.on('messageCreate', async (message) => {
         const end = start + itemsPerPage;
         const currentServers = servers.slice(start, end);
         
-        let description = '';
-        currentServers.forEach(server => {
-            description += `${server.setup} **${server.name}**\n`;
-            description += `   👤 ${server.members} عضو | 🆔 ${server.id}\n`;
-            description += `   👑 المالك: <@${server.owner}>\n\n`;
+        let description = '📋 **قائمة السيرفرات بالتفصيل:**\n\n';
+        currentServers.forEach((server, index) => {
+            const serverNum = start + index + 1;
+            description += `**${serverNum}. ${server.name}**\n`;
+            description += `├─ 🆔 **السيرفر:** \`${server.id}\`\n`;
+            description += `├─ 👑 **المالك:** <@${server.owner}> (\`${server.owner}\`)\n`;
+            description += `├─ 👥 **الأعضاء:** ${server.members.toLocaleString()}\n`;
+            description += `├─ ⚙️ **الإعدادات:** ${server.setup}\n`;
+            description += `└─ 🔐 **القفل:** ${server.locked}\n\n`;
         });
         
         const serversEmbed = new EmbedBuilder()
             .setColor(0x2ecc71)
-            .setTitle('🏠 قائمة السيرفرات')
+            .setTitle(`🏠 قائمة السيرفرات - الصفحة ${page}/${totalPages}`)
             .setDescription(description || 'لا توجد سيرفرات')
             .addFields({
-                name: '📊 الإحصائيات',
-                value: `• السيرفرات: ${servers.length}\n• المكتملة: ${servers.filter(s => s.setup === '✅').length}\n• الناقصة: ${servers.filter(s => s.setup === '❌').length}`
+                name: '📊 إحصائيات مفصلة',
+                value: `• **إجمالي السيرفرات:** ${servers.length}\n• **المكتملة:** ${servers.filter(s => s.setup === '✅').length}\n• **الناقصة:** ${servers.filter(s => s.setup === '❌').length}\n• **المقفلة:** ${servers.filter(s => s.locked === '🔒').length}\n• **إجمالي الأعضاء:** ${servers.reduce((acc, s) => acc + s.members, 0).toLocaleString()}`
             })
             .setFooter({ 
-                text: `الصفحة ${page}/${totalPages} | ${OWNER_PREFIX}servers <رقم الصفحة>` 
+                text: `أمر: ${OWNER_PREFIX}servers <رقم الصفحة>\nعرض ${start+1}-${Math.min(end, servers.length)} من ${servers.length}` 
             })
             .setTimestamp();
         
-        const serversMsg = await message.reply({ embeds: [serversEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await serversMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 25000);
+        await message.reply({ embeds: [serversEmbed] });
         return;
     }
     
@@ -720,60 +703,52 @@ client.on('messageCreate', async (message) => {
         const serverId = args[0];
         
         if (!serverId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}server 123456789012345678\``);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ خطأ')
+                .setDescription(`**يجب إدخال ID السيرفر!**\n\nمثال: \`${OWNER_PREFIX}server 123456789012345678\``)
+                .setFooter({ text: 'استخدم !servers لرؤية قائمة السيرفرات' });
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const guild = client.guilds.cache.get(serverId);
         
         if (!guild) {
-            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\``)
+                .setFooter({ text: 'استخدم !servers لرؤية قائمة السيرفرات' });
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const settings = getServerSettings(guild.id);
         const isComplete = isServerSetupComplete(guild.id);
         const owner = await guild.fetchOwner();
         
+        // التحقق إذا السيرفر مقفل
+        const lockedServers = serverSettings.lockedServers || [];
+        const isLocked = lockedServers.includes(guild.id);
+        
         const serverEmbed = new EmbedBuilder()
-            .setColor(isComplete ? 0x2ecc71 : 0xe74c3c)
+            .setColor(isLocked ? 0xe74c3c : (isComplete ? 0x2ecc71 : 0xf39c12))
             .setTitle(`🏠 ${guild.name}`)
             .setDescription(`**معلومات مفصلة عن السيرفر**`)
             .addFields(
-                { name: '🆔 المعرف', value: guild.id, inline: true },
-                { name: '👑 المالك', value: owner ? `${owner.user.tag}\n<@${owner.id}>` : 'غير معروف', inline: true },
-                { name: '👥 الأعضاء', value: `${guild.memberCount} عضو`, inline: true },
-                { name: '📅 تاريخ الإنشاء', value: `<t:${Math.floor(guild.createdTimestamp/1000)}:D>`, inline: true },
-                { name: '📅 تاريخ دخول البوت', value: `<t:${Math.floor(guild.joinedTimestamp/1000)}:D>`, inline: true },
-                { name: '⚙️ حالة الإعدادات', value: isComplete ? '✅ مكتملة' : '❌ غير مكتملة', inline: true }
+                { name: '🆔 **معرف السيرفر**', value: `\`${guild.id}\``, inline: false },
+                { name: '👑 **المالك**', value: owner ? `${owner.user.tag}\n<@${owner.id}> (\`${owner.id}\`)` : 'غير معروف', inline: false },
+                { name: '👥 **الأعضاء**', value: `${guild.memberCount.toLocaleString()} عضو`, inline: true },
+                { name: '📅 **تاريخ الإنشاء**', value: `<t:${Math.floor(guild.createdTimestamp/1000)}:D>`, inline: true },
+                { name: '📅 **تاريخ دخول البوت**', value: `<t:${Math.floor(guild.joinedTimestamp/1000)}:D>`, inline: true },
+                { name: '⚙️ **حالة الإعدادات**', value: isComplete ? '✅ مكتملة' : '❌ غير مكتملة', inline: true },
+                { name: '🔐 **حالة القفل**', value: isLocked ? '🔒 مقفل' : '🔓 مفتوح', inline: true }
             )
             .setFooter({ text: `استخدم ${OWNER_PREFIX}servers لعرض كل السيرفرات` })
             .setTimestamp();
         
-        const serverMsg = await message.reply({ embeds: [serverEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await serverMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 20000);
+        await message.reply({ embeds: [serverEmbed] });
         return;
     }
     
@@ -782,15 +757,12 @@ client.on('messageCreate', async (message) => {
         const messageContent = args.join(' ');
         
         if (!messageContent) {
-            const errorMsg = await message.reply(`❌ **يجب كتابة الرسالة!**\nمثال: \`${OWNER_PREFIX}broadcast هناك تحديث جديد للبوت...\``);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ خطأ')
+                .setDescription(`**يجب كتابة الرسالة!**\n\nمثال: \`${OWNER_PREFIX}broadcast هناك تحديث جديد للبوت...\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         // رسالة تأكيد
@@ -878,15 +850,6 @@ client.on('messageCreate', async (message) => {
                             .setTimestamp()
                     ]
                 });
-                
-                setTimeout(async () => {
-                    try {
-                        await message.delete();
-                        await confirmMessage.delete();
-                    } catch (error) {
-                        console.log('❌ لم أستطع حذف الرسائل');
-                    }
-                }, 20000);
             } else {
                 await confirmMessage.edit({
                     embeds: [
@@ -896,15 +859,6 @@ client.on('messageCreate', async (message) => {
                             .setDescription('لم يتم إرسال الرسالة.')
                     ]
                 });
-                
-                setTimeout(async () => {
-                    try {
-                        await confirmMessage.delete();
-                        await message.delete();
-                    } catch (error) {
-                        console.log('❌ لم أستطع حذف الرسائل');
-                    }
-                }, 10000);
             }
         } catch (error) {
             await confirmMessage.edit({
@@ -915,15 +869,6 @@ client.on('messageCreate', async (message) => {
                         .setDescription('لم يتم الرد في الوقت المحدد.')
                 ]
             });
-            
-            setTimeout(async () => {
-                try {
-                    await confirmMessage.delete();
-                    await message.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
         }
         return;
     }
@@ -934,29 +879,23 @@ client.on('messageCreate', async (message) => {
         const dmMessage = args.slice(1).join(' ');
         
         if (!serverId || !dmMessage) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر والرسالة!**\nمثال: \`${OWNER_PREFIX}dm 123456789012345678 مرحباً، هناك تحديث جديد...\``);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ خطأ')
+                .setDescription(`**يجب إدخال ID السيرفر والرسالة!**\n\nمثال: \`${OWNER_PREFIX}dm 123456789012345678 مرحباً، هناك تحديث جديد...\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const guild = client.guilds.cache.get(serverId);
         
         if (!guild) {
-            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         try {
@@ -981,28 +920,25 @@ client.on('messageCreate', async (message) => {
             
             await owner.send({ embeds: [dmEmbed] });
             
-            const successMsg = await message.reply(`✅ **تم إرسال الرسالة بنجاح لمالك ${guild.name}!**\n👑 **المالك:** ${owner.user.tag}\n📨 **الرسالة:** ${dmMessage.substring(0, 100)}${dmMessage.length > 100 ? '...' : ''}`);
+            const successEmbed = new EmbedBuilder()
+                .setColor(0x2ecc71)
+                .setTitle('✅ تم الإرسال بنجاح!')
+                .setDescription(`**تم إرسال الرسالة لمالك ${guild.name}!**`)
+                .addFields(
+                    { name: '👑 **المالك**', value: owner.user.tag, inline: true },
+                    { name: '🏠 **السيرفر**', value: guild.name, inline: true },
+                    { name: '📨 **محتوى الرسالة**', value: dmMessage.substring(0, 100) + (dmMessage.length > 100 ? '...' : ''), inline: false }
+                );
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await successMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
+            await message.reply({ embeds: [successEmbed] });
             
         } catch (error) {
-            const errorMsg = await message.reply(`❌ **فشل إرسال الرسالة!**\n${error.message}`);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ فشل إرسال الرسالة!')
+                .setDescription(`**حدث خطأ:**\n\`${error.message}\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
+            await message.reply({ embeds: [errorEmbed] });
         }
         return;
     }
@@ -1012,29 +948,23 @@ client.on('messageCreate', async (message) => {
         const serverId = args[0];
         
         if (!serverId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}leave 123456789012345678\``);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ خطأ')
+                .setDescription(`**يجب إدخال ID السيرفر!**\n\nمثال: \`${OWNER_PREFIX}leave 123456789012345678\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const guild = client.guilds.cache.get(serverId);
         
         if (!guild) {
-            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const confirmEmbed = new EmbedBuilder()
@@ -1057,6 +987,12 @@ client.on('messageCreate', async (message) => {
             if (collected.first().content === 'تأكيد') {
                 // مسح إعدادات السيرفر
                 delete serverSettings[guild.id];
+                
+                // إزالة من القائمة المقفلة إذا موجود
+                if (serverSettings.lockedServers) {
+                    serverSettings.lockedServers = serverSettings.lockedServers.filter(id => id !== guild.id);
+                }
+                
                 saveSettings(serverSettings);
                 
                 // خروج البوت من السيرفر
@@ -1083,15 +1019,6 @@ client.on('messageCreate', async (message) => {
                     ]
                 });
             }
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await confirmMessage.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
         } catch (error) {
             await confirmMessage.edit({
                 embeds: [
@@ -1101,15 +1028,6 @@ client.on('messageCreate', async (message) => {
                         .setDescription('لم يتم الرد في الوقت المحدد.')
                 ]
             });
-            
-            setTimeout(async () => {
-                try {
-                    await confirmMessage.delete();
-                    await message.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
         }
         return;
     }
@@ -1119,29 +1037,23 @@ client.on('messageCreate', async (message) => {
         const serverId = args[0];
         
         if (!serverId) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال ID السيرفر!**\nمثال: \`${OWNER_PREFIX}clearsettings 123456789012345678\``);
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ خطأ')
+                .setDescription(`**يجب إدخال ID السيرفر!**\n\nمثال: \`${OWNER_PREFIX}clearsettings 123456789012345678\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const guild = client.guilds.cache.get(serverId);
         
         if (!guild) {
-            const errorMsg = await message.reply('❌ **السيرفر غير موجود أو البوت غير مضاف له!**');
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\``);
             
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
+            return message.reply({ embeds: [errorEmbed] });
         }
         
         const confirmEmbed = new EmbedBuilder()
@@ -1186,15 +1098,6 @@ client.on('messageCreate', async (message) => {
                     ]
                 });
             }
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await confirmMessage.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 15000);
         } catch (error) {
             await confirmMessage.edit({
                 embeds: [
@@ -1204,140 +1107,99 @@ client.on('messageCreate', async (message) => {
                         .setDescription('لم يتم الرد في الوقت المحدد.')
                 ]
             });
-            
-            setTimeout(async () => {
-                try {
-                    await confirmMessage.delete();
-                    await message.delete();
-                } catch (error) {
-                    console.log('❌ لم أستطع حذف الرسائل');
-                }
-            }, 10000);
         }
         return;
     }
     
-    // أمر lock
+    // أمر lock للسيرفر المحدد
     if (command === 'lock') {
-        BOT_LOCKED = true;
+        const serverId = args[0];
+        
+        if (!serverId) {
+            const lockEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('🔒 قفل البوت في سيرفر محدد')
+                .setDescription('**استخدام:**\n`!lock <ID_السيرفر>`\n\n**مثال:**\n`!lock 123456789012345678`\n\nلرؤية قائمة السيرفرات: `!servers`')
+                .setFooter({ text: 'هذا الأمر بيقفل البوت في سيرفر محدد فقط' });
+            
+            return message.reply({ embeds: [lockEmbed] });
+        }
+        
+        const guild = client.guilds.cache.get(serverId);
+        
+        if (!guild) {
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\`\n\nاستخدم \`!servers\` لرؤية كل السيرفرات`);
+            
+            return message.reply({ embeds: [errorEmbed] });
+        }
+        
+        // إضافة السيرفر للقائمة المغلقة
+        if (!serverSettings.lockedServers) serverSettings.lockedServers = [];
+        
+        if (!serverSettings.lockedServers.includes(serverId)) {
+            serverSettings.lockedServers.push(serverId);
+            saveSettings(serverSettings);
+        }
         
         const lockEmbed = new EmbedBuilder()
-            .setColor(0xe74c3c)
-            .setTitle('🔒 تم قفل البوت')
-            .setDescription('**تم قفل البوت بنجاح!**\n\n❌ **لا يمكن لأي سيرفر جديد استخدام البوت الآن**\n✅ **السيرفرات الحالية تستمر في العمل**\n\nاستخدم `!unlock` لفتح البوت.')
+            .setColor(0x2ecc71)
+            .setTitle('✅ تم قفل البوت في السيرفر')
+            .setDescription(`**تم قفل البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}\n🆔 **المعرف:** \`${guild.id}\`\n👑 **المالك:** <@${guild.ownerId}>\n\nالآن البوت مش هيشتغل في هذا السيرفر.`)
+            .addFields({
+                name: 'ملاحظة',
+                value: 'لإعادة تفعيل البوت في هذا السيرفر، استخدم:\n`!unlock ' + serverId + '`'
+            })
             .setFooter({ text: `تم القفل بواسطة: ${message.author.tag}` })
             .setTimestamp();
         
-        const lockMsg = await message.reply({ embeds: [lockEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await lockMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 15000);
+        await message.reply({ embeds: [lockEmbed] });
         return;
     }
     
-    // أمر unlock
+    // أمر unlock للسيرفر المحدد
     if (command === 'unlock') {
-        BOT_LOCKED = false;
+        const serverId = args[0];
+        
+        if (!serverId) {
+            const unlockEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('🔓 فتح البوت في سيرفر محدد')
+                .setDescription('**استخدام:**\n`!unlock <ID_السيرفر>`\n\n**مثال:**\n`!unlock 123456789012345678`\n\nلرؤية قائمة السيرفرات: `!servers`')
+                .setFooter({ text: 'هذا الأمر بيفتح البوت في سيرفر محدد فقط' });
+            
+            return message.reply({ embeds: [unlockEmbed] });
+        }
+        
+        const guild = client.guilds.cache.get(serverId);
+        
+        if (!guild) {
+            const errorEmbed = new EmbedBuilder()
+                .setColor(0xe74c3c)
+                .setTitle('❌ سيرفر غير موجود')
+                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\`\n\nاستخدم \`!servers\` لرؤية كل السيرفرات`);
+            
+            return message.reply({ embeds: [errorEmbed] });
+        }
+        
+        // إزالة السيرفر من القائمة المغلقة
+        if (!serverSettings.lockedServers) serverSettings.lockedServers = [];
+        
+        if (serverSettings.lockedServers.includes(serverId)) {
+            serverSettings.lockedServers = serverSettings.lockedServers.filter(id => id !== serverId);
+            saveSettings(serverSettings);
+        }
         
         const unlockEmbed = new EmbedBuilder()
             .setColor(0x2ecc71)
-            .setTitle('🔓 تم فتح البوت')
-            .setDescription('**تم فتح البوت بنجاح!**\n\n✅ **يمكن للسيرفرات الجديدة استخدام البوت الآن**\n✅ **جميع السيرفرات تعمل بشكل طبيعي**\n\nاستخدم `!lock` لقفل البوت.')
+            .setTitle('✅ تم فتح البوت في السيرفر')
+            .setDescription(`**تم فتح البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}\n🆔 **المعرف:** \`${guild.id}\`\n👑 **المالك:** <@${guild.ownerId}>\n\nالآن البوت هيشتغل في هذا السيرفر.`)
             .setFooter({ text: `تم الفتح بواسطة: ${message.author.tag}` })
             .setTimestamp();
         
-        const unlockMsg = await message.reply({ embeds: [unlockEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await unlockMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 15000);
-        return;
-    }
-    
-    // أمر sethola
-    if (command === 'sethola') {
-        const holaLink = args[0];
-        
-        if (!holaLink) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال رابط!**\nمثال: \`${OWNER_PREFIX}sethola https://discord.gg/xxxxxxx\``);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
-        }
-        
-        // يمكن حفظ الرابط في ملف أو متغير
-        const holaEmbed = new EmbedBuilder()
-            .setColor(0x9b59b6)
-            .setTitle('🔗 تم تعيين رابط Hola')
-            .setDescription(`**تم تعيين الرابط بنجاح!**\n\n${holaLink}\n\nسيظهر هذا الرابط في رسائل الترحيب الجديدة.`)
-            .setFooter({ text: `تم التعيين بواسطة: ${message.author.tag}` })
-            .setTimestamp();
-        
-        const holaMsg = await message.reply({ embeds: [holaEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await holaMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 15000);
-        return;
-    }
-    
-    // أمر setsub
-    if (command === 'setsub') {
-        const subLink = args[0];
-        
-        if (!subLink) {
-            const errorMsg = await message.reply(`❌ **يجب إدخال رابط!**\nمثال: \`${OWNER_PREFIX}setsub https://example.com/subscribe\``);
-            
-            setTimeout(async () => {
-                try {
-                    await message.delete();
-                    await errorMsg.delete();
-                } catch (error) {}
-            }, 10000);
-            return;
-        }
-        
-        SUBSCRIPTION_REQUIRED = true;
-        SUBSCRIPTION_LINK = subLink;
-        
-        const subEmbed = new EmbedBuilder()
-            .setColor(0xf1c40f)
-            .setTitle('💰 تم تفعيل نظام الاشتراك')
-            .setDescription(`**تم تفعيل نظام الاشتراك بنجاح!**\n\n🔗 **الرابط:** ${subLink}\n\n⚠️ **الآن البوت مقفل ويحتاج اشتراك للاستخدام**\n\nاستخدم \`${OWNER_PREFIX}unlock\` لفتح البوت بدون اشتراك.`)
-            .setFooter({ text: `تم التفعيل بواسطة: ${message.author.tag}` })
-            .setTimestamp();
-        
-        const subMsg = await message.reply({ embeds: [subEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await subMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 20000);
+        await message.reply({ embeds: [unlockEmbed] });
         return;
     }
     
@@ -1350,7 +1212,7 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 {
                     name: '📊 **أوامر الإحصائيات**',
-                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت الكاملة\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت الكاملة\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات مع كل التفاصيل\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
                 },
                 {
                     name: '📢 **أوامر البث والمراسلة**',
@@ -1358,30 +1220,21 @@ client.on('messageCreate', async (message) => {
                 },
                 {
                     name: '⚙️ **أوامر التحكم**',
-                    value: `\`${OWNER_PREFIX}leave <ID_السيرفر>\` - إخراج البوت من سيرفر\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات سيرفر\n\`${OWNER_PREFIX}lock\` - قفل البوت عن السيرفرات الجديدة\n\`${OWNER_PREFIX}unlock\` - فتح البوت للسيرفرات الجديدة`
-                },
-                {
-                    name: '🔗 **أوامر الروابط**',
-                    value: `\`${OWNER_PREFIX}sethola <رابط>\` - تعيين رابط Hola\n\`${OWNER_PREFIX}setsub <رابط>\` - تفعيل نظام الاشتراك`
+                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر محدد\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - إخراج البوت من سيرفر\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات سيرفر`
                 },
                 {
                     name: '👑 **أوامر عامة**',
                     value: `\`${OWNER_PREFIX}panel\` - عرض لوحة التحكم\n\`${OWNER_PREFIX}help\` - عرض هذه القائمة`
                 }
             )
+            .addFields({
+                name: '🔍 **كيف تجيب الـ IDs؟**',
+                value: '1. افتح Settings → Advanced → Developer Mode\n2. كليك يمين على السيرفر/المستخدم → Copy ID'
+            })
             .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر` })
             .setTimestamp();
         
-        const helpMsg = await message.reply({ embeds: [helpEmbed] });
-        
-        setTimeout(async () => {
-            try {
-                await message.delete();
-                await helpMsg.delete();
-            } catch (error) {
-                console.log('❌ لم أستطع حذف الرسائل');
-            }
-        }, 30000);
+        await message.reply({ embeds: [helpEmbed] });
         return;
     }
 });
@@ -1393,18 +1246,11 @@ client.on('interactionCreate', async (interaction) => {
     
     const { commandName, options, guild, member, user } = interaction;
     
-    // التحقق من قفل البوت
-    if (BOT_LOCKED) {
+    // التحقق إذا السيرفر مقفل
+    const lockedServers = serverSettings.lockedServers || [];
+    if (lockedServers.includes(guild.id)) {
         return interaction.reply({ 
-            content: '❌ **البوت مقفل حالياً!**\n\nالرجاء الانتظار حتى يتم فتح البوت من قبل المالك.',
-            ephemeral: true 
-        });
-    }
-    
-    // التحقق من نظام الاشتراك
-    if (SUBSCRIPTION_REQUIRED) {
-        return interaction.reply({ 
-            content: `❌ **البوت يحتاج اشتراك للاستخدام!**\n\n🔗 **رابط الاشتراك:** ${SUBSCRIPTION_LINK}\n\nبعد الاشتراك، سيتم فتح البوت لك.`,
+            content: '❌ **البوت مقفل في هذا السيرفر!**\n\nيجب على مالك البوت فتح البوت في هذا السيرفر أولاً.',
             ephemeral: true 
         });
     }
@@ -1497,10 +1343,6 @@ client.on('interactionCreate', async (interaction) => {
 1. فتح **Settings → Advanced → Developer Mode**
 2. كليك يمين على أي قناة أو رتبة → **Copy ID**
                     `
-                },
-                {
-                    name: '🎥 **شرح مفصل**',
-                    value: '🔗 [اضغط هنا لمشاهدة شرح البوت على اليوتيوب](https://youtube.com/@yoursupportbot)'
                 }
             )
             .setFooter({ 
@@ -2100,9 +1942,10 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 client.on('guildCreate', async (guild) => {
     console.log(`➕ تم إضافة البوت لسيرفر جديد: ${guild.name} (${guild.id})`);
     
-    // التحقق من قفل البوت
-    if (BOT_LOCKED) {
-        console.log(`⚠️  البوت مقفل - محاولة إضافة لسيرفر جديد: ${guild.name}`);
+    // التحقق إذا السيرفر مقفل
+    const lockedServers = serverSettings.lockedServers || [];
+    if (lockedServers.includes(guild.id)) {
+        console.log(`🚫 السيرفر مقفل: ${guild.name}`);
         
         // إرسال رسالة للمالك
         try {
@@ -2112,8 +1955,12 @@ client.on('guildCreate', async (guild) => {
                     embeds: [
                         new EmbedBuilder()
                             .setColor(0xe74c3c)
-                            .setTitle('🔒 البوت مقفل حالياً')
-                            .setDescription('**عذراً، البوت مقفل حالياً ولا يقبل سيرفرات جديدة.**\n\nيرجى الانتظار حتى يتم فتح البوت من قبل المالك.')
+                            .setTitle('🔒 البوت غير متاح في سيرفرك')
+                            .setDescription(`**عذراً، البوت مقفل في سيرفرك (${guild.name})**\n\nإذا كنت ترغب في استخدام البوت، يرجى التواصل مع مالك البوت.`)
+                            .addFields({
+                                name: 'معلومات السيرفر',
+                                value: `• **الاسم:** ${guild.name}\n• **المعرف:** \`${guild.id}\`\n• **الأعضاء:** ${guild.memberCount}`
+                            })
                             .setFooter({ text: 'Sienna Support Bot' })
                             .setTimestamp()
                     ]
@@ -2136,43 +1983,7 @@ client.on('guildCreate', async (guild) => {
         return;
     }
     
-    // التحقق من نظام الاشتراك
-    if (SUBSCRIPTION_REQUIRED) {
-        console.log(`⚠️  البوت يحتاج اشتراك - محاولة إضافة لسيرفر جديد: ${guild.name}`);
-        
-        // إرسال رسالة للمالك
-        try {
-            const owner = await guild.fetchOwner();
-            if (owner) {
-                await owner.send({
-                    embeds: [
-                        new EmbedBuilder()
-                            .setColor(0xf1c40f)
-                            .setTitle('💰 اشتراك مطلوب')
-                            .setDescription(`**عذراً، البوت يحتاج اشتراك للاستخدام.**\n\n🔗 **رابط الاشتراك:** ${SUBSCRIPTION_LINK}\n\nبعد الاشتراك، يمكنك إضافة البوت مرة أخرى.`)
-                            .setFooter({ text: 'Sienna Support Bot' })
-                            .setTimestamp()
-                    ]
-                });
-            }
-        } catch (error) {
-            console.log(`❌ لم أستطع إرسال رسالة لمالك ${guild.name}`);
-        }
-        
-        // خروج البوت من السيرفر
-        setTimeout(async () => {
-            try {
-                await guild.leave();
-                console.log(`🚫 البوت خرج من سيرفر (اشتراك): ${guild.name}`);
-            } catch (error) {
-                console.log(`❌ فشل خروج البوت من ${guild.name}`);
-            }
-        }, 5000);
-        
-        return;
-    }
-    
-    // إرسال رسالة ترحيب لمالك السيرفر
+    // إرسال رسالة ترحيب مع الرابط القابل للنقر
     try {
         const owner = await guild.fetchOwner();
         if (owner) {
@@ -2192,7 +2003,11 @@ client.on('guildCreate', async (guild) => {
                 })
                 .setTimestamp();
 
-            await owner.send({ embeds: [welcomeEmbed] });
+            // إرسال الرسالة مع الرابط القابل للنقر
+            await owner.send({ 
+                content: '[Holaa :>](https://discord.gg/your-invite-link)', // رابط السيرفر الخاص بك هنا
+                embeds: [welcomeEmbed] 
+            });
             console.log(`📩 تم إرسال رسالة ترحيب لمالك السيرفر: ${owner.user.tag}`);
         }
     } catch (error) {
@@ -2264,8 +2079,11 @@ client.on('ready', async () => {
     console.log('=================================');
     console.log(`✅ ${client.user.tag} يعمل بنجاح!`);
     console.log(`📁 السيرفرات: ${client.guilds.cache.size}`);
-    console.log(`🔐 حالة القفل: ${BOT_LOCKED ? 'مقفل 🔒' : 'مفتوح 🔓'}`);
-    console.log(`💰 نظام الاشتراك: ${SUBSCRIPTION_REQUIRED ? 'مفعل' : 'غير مفعل'}`);
+    
+    // حساب السيرفرات المقفلة
+    const lockedServers = serverSettings.lockedServers || [];
+    const activeLocked = lockedServers.filter(id => client.guilds.cache.has(id)).length;
+    console.log(`🔐 السيرفرات المقفلة: ${activeLocked}`);
     
     // تسجيل الـ Slash Commands
     await registerCommands();
