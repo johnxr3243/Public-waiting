@@ -906,7 +906,7 @@ client.on('messageCreate', async (message) => {
             
             const dmEmbed = new EmbedBuilder()
                 .setColor(0xFFFFFF)
-                .setTitle('📢 رسالة من مالك بوت Sienna')
+                .setTitle('رساله من مطور بوت  Sienna :>')
                 .setDescription(dmMessage)
                 .addFields({
                     name: 'معلومات الإرسال',
@@ -1250,7 +1250,7 @@ client.on('interactionCreate', async (interaction) => {
     const lockedServers = serverSettings.lockedServers || [];
     if (lockedServers.includes(guild.id)) {
         return interaction.reply({ 
-            content: '❌ **البوت مقفل في هذا السيرفر!**\n\nيجب على مالك البوت فتح البوت في هذا السيرفر أولاً.',
+            content: '❌ **يجيب تجديد الاشتراك :<**\n\nموقع تجديد الاشتراك: [https://siennaai.pages.dev/](https://discord.gg/1mec)',
             ephemeral: true 
         });
     }
@@ -1956,7 +1956,7 @@ client.on('guildCreate', async (guild) => {
                         new EmbedBuilder()
                             .setColor(0xe74c3c)
                             .setTitle('🔒 البوت غير متاح في سيرفرك')
-                            .setDescription(`**عذراً، البوت مقفل في سيرفرك (${guild.name})**\n\nإذا كنت ترغب في استخدام البوت، يرجى التواصل مع مالك البوت.`)
+                            .setDescription(`**عذراً، البوت مقفل في سيرفرك (${guild.name})**\n\n**سبب القفل:** انتهاء الاشتراك أو مخالفة الشروط\n\n**موقع تجديد الاشتراك:** [https://siennaai.pages.dev/](https://discord.gg/1mec)`)
                             .addFields({
                                 name: 'معلومات السيرفر',
                                 value: `• **الاسم:** ${guild.name}\n• **المعرف:** \`${guild.id}\`\n• **الأعضاء:** ${guild.memberCount}`
@@ -2005,7 +2005,7 @@ client.on('guildCreate', async (guild) => {
 
             // إرسال الرسالة مع الرابط القابل للنقر
             await owner.send({ 
-                content: '[Holaa :>](https://discord.gg/your-invite-link)', // رابط السيرفر الخاص بك هنا
+                content: '[Holaa :>](https://discord.gg/1mec)', // رابط السيرفر الخاص بك هنا
                 embeds: [welcomeEmbed] 
             });
             console.log(`📩 تم إرسال رسالة ترحيب لمالك السيرفر: ${owner.user.tag}`);
@@ -2057,11 +2057,11 @@ client.on('guildCreate', async (guild) => {
         if (textChannel) {
             const publicEmbed = new EmbedBuilder()
                 .setColor(0xFFFFFF)
-                .setTitle('👋 مرحباً بالجميع!')
-                .setDescription(`**تمت إضافة بوت Sienna بنجاح إلى ${guild.name}**\n\nلبدء استخدام البوت، يجب على **مالك السيرفر أو المشرفين** إعداده أولاً.`)
+                .setTitle(':> مرحباً بالجميع!')
+                .setDescription(`**تمت إضافة بوت Sienna بنجاح إلى ${guild.name}**Welcome to Sienna Support Bot, your new voice support system!\n\n**للبدء، يجب على الإدارة إعداد النظام باستخدام الأوامر التالية:**`)
                 .addFields({
                     name: '📝 الخطوات الأولية',
-                    value: '1. مالك السيرفر سيحصل على رسالة خاصة\n2. اتبع التعليمات في الرسالة\n3. استخدم `/help` لعرض الأوامر'
+                    value: ' استخدم `/help` لعرض الأوامر'
                 })
                 .setFooter({ text: 'Sienna Support Bot | نظام دعم صوتي متكامل' })
                 .setTimestamp();
@@ -2102,7 +2102,7 @@ client.on('ready', async () => {
     
     client.user.setPresence({
         activities: [{
-            name: '/help للمساعدة | !panel للتحكم',
+            name: 'Sienna Support Bot | /help',
             type: 2
         }],
         status: 'online'
