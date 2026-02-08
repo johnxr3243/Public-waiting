@@ -26,9 +26,6 @@ const config = {
 const BOT_OWNER_ID = '1423320282281676878';
 const OWNER_PREFIX = '!';
 
-// متغيرات النظام
-let BOT_LOCKED = false;
-
 // ملف الإعدادات
 const SETTINGS_FILE = 'settings.json';
 
@@ -589,7 +586,7 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 {
                     name: '📊 **أوامر الإحصائيات**',
-                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات (مع ID السيرفر ومالكه)\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات (مع ID السيرفر ومالكه)\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد\n\`${OWNER_PREFIX}locklist\` - قائمة السيرفرات المقفلة`
                 },
                 {
                     name: '📢 **أوامر البث**',
@@ -597,7 +594,7 @@ client.on('messageCreate', async (message) => {
                 },
                 {
                     name: '⚙️ **أوامر التحكم**',
-                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - طلع البوت\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات`
+                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - طلع البوت\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات\n\`${OWNER_PREFIX}clearownerdm\` - مسح الشات الخاص مع المالك`
                 },
                 {
                     name: '👑 **أوامر عامة**',
@@ -621,7 +618,8 @@ client.on('messageCreate', async (message) => {
         
         // السيرفرات المقفلة
         const lockedServers = serverSettings.lockedServers || [];
-        const activeLocked = lockedServers.filter(id => client.guilds.cache.has(id)).length;
+        const allLockedCount = lockedServers.length; // كل السيرفرات المقفلة حتى اللي البوت مش فيها
+        const activeLocked = lockedServers.filter(id => client.guilds.cache.has(id)).length; // بس اللي البوت موجود فيها
         
         const statsEmbed = new EmbedBuilder()
             .setColor(0x3498db)
@@ -632,7 +630,7 @@ client.on('messageCreate', async (message) => {
                 { name: '✅ الإعدادات المكتملة', value: `\`${completedSetups}\` سيرفر`, inline: true },
                 { name: '📞 المكالمات النشطة', value: `\`${totalActiveCalls}\` مكالمة`, inline: true },
                 { name: '🔒 الرومات الخاصة', value: `\`${totalPrivateRooms}\` روم`, inline: true },
-                { name: '🚫 السيرفرات المقفلة', value: `\`${activeLocked}\` سيرفر`, inline: true },
+                { name: '🚫 السيرفرات المقفلة', value: `\`${allLockedCount}\` سيرفر (${activeLocked} موجودة)`, inline: true },
                 { name: '🟢 وقت التشغيل', value: `<t:${Math.floor(Date.now()/1000)}:R>`, inline: true }
             )
             .setFooter({ text: `مالك البوت: ${message.author.tag}` })
@@ -698,6 +696,73 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    // أمر locklist - لعرض قائمة السيرفرات المقفلة فقط
+    if (command === 'locklist') {
+        const lockedServers = serverSettings.lockedServers || [];
+        
+        if (lockedServers.length === 0) {
+            const locklistEmbed = new EmbedBuilder()
+                .setColor(0xf39c12)
+                .setTitle('📋 قائمة السيرفرات المقفلة')
+                .setDescription('**لا توجد سيرفرات مقفلة حالياً.**')
+                .setFooter({ text: 'استخدم !lock <ID> لقفل سيرفر' })
+                .setTimestamp();
+            
+            await message.reply({ embeds: [locklistEmbed] });
+            return;
+        }
+        
+        const itemsPerPage = 10;
+        const totalPages = Math.ceil(lockedServers.length / itemsPerPage);
+        
+        let page = parseInt(args[0]) || 1;
+        if (page < 1) page = 1;
+        if (page > totalPages) page = totalPages;
+        
+        const start = (page - 1) * itemsPerPage;
+        const end = start + itemsPerPage;
+        const currentLocks = lockedServers.slice(start, end);
+        
+        let description = '🔒 **قائمة السيرفرات المقفلة:**\n\n';
+        
+        for (const serverId of currentLocks) {
+            const guild = client.guilds.cache.get(serverId);
+            
+            if (guild) {
+                // السيرفر موجود عند البوت
+                const owner = await guild.fetchOwner().catch(() => null);
+                description += `🔴 **${guild.name}**\n`;
+                description += `├─ 🆔 السيرفر: \`${serverId}\`\n`;
+                description += `├─ 👑 المالك: ${owner ? `<@${owner.id}> (\`${owner.id}\`)` : 'غير معروف'}\n`;
+                description += `├─ 👥 الأعضاء: ${guild.memberCount.toLocaleString()}\n`;
+                description += `└─ 📍 البوت موجود في السيرفر\n\n`;
+            } else {
+                // السيرفر مش موجود عند البوت (خرج البوت منه)
+                description += `⚫ **سيرفر غير موجود**\n`;
+                description += `├─ 🆔 السيرفر: \`${serverId}\`\n`;
+                description += `├─ 👑 المالك: غير معروف\n`;
+                description += `├─ 👥 الأعضاء: غير معروف\n`;
+                description += `└─ 📍 البوت غير موجود في السيرفر\n\n`;
+            }
+        }
+        
+        const locklistEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle(`📋 قائمة السيرفرات المقفلة - الصفحة ${page}/${totalPages}`)
+            .setDescription(description)
+            .addFields({
+                name: '📊 إحصائيات القفل',
+                value: `• **إجمالي السيرفرات المقفلة:** ${lockedServers.length}\n• **البوت موجود في:** ${lockedServers.filter(id => client.guilds.cache.has(id)).length}\n• **البوت غير موجود في:** ${lockedServers.filter(id => !client.guilds.cache.has(id)).length}`
+            })
+            .setFooter({ 
+                text: `أمر: ${OWNER_PREFIX}unlock <ID> لفتح السيرفر\nعرض ${start+1}-${Math.min(end, lockedServers.length)} من ${lockedServers.length}` 
+            })
+            .setTimestamp();
+        
+        await message.reply({ embeds: [locklistEmbed] });
+        return;
+    }
+    
     // أمر server
     if (command === 'server') {
         const serverId = args[0];
@@ -714,23 +779,29 @@ client.on('messageCreate', async (message) => {
         
         const guild = client.guilds.cache.get(serverId);
         
+        // التحقق إذا السيرفر مقفل حتى لو مش موجود
+        const lockedServers = serverSettings.lockedServers || [];
+        const isLocked = lockedServers.includes(serverId);
+        
         if (!guild) {
-            const errorEmbed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle('❌ سيرفر غير موجود')
-                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\``)
-                .setFooter({ text: 'استخدم !servers لرؤية قائمة السيرفرات' });
+            const serverEmbed = new EmbedBuilder()
+                .setColor(isLocked ? 0xe74c3c : 0x95a5a6)
+                .setTitle('🏠 سيرفر غير موجود في البوت')
+                .setDescription(`**البوت غير موجود في هذا السيرفر حالياً**`)
+                .addFields(
+                    { name: '🆔 **معرف السيرفر**', value: `\`${serverId}\``, inline: false },
+                    { name: '🔐 **حالة القفل**', value: isLocked ? '🔒 مقفل (يمكن فتحه بالرغم من أن البوت مش موجود)' : '🔓 غير مقفل', inline: false }
+                )
+                .setFooter({ text: isLocked ? 'استخدم !unlock <ID> لفتح السيرفر' : 'السيرفر ليس مقفلاً' })
+                .setTimestamp();
             
-            return message.reply({ embeds: [errorEmbed] });
+            await message.reply({ embeds: [serverEmbed] });
+            return;
         }
         
         const settings = getServerSettings(guild.id);
         const isComplete = isServerSetupComplete(guild.id);
         const owner = await guild.fetchOwner();
-        
-        // التحقق إذا السيرفر مقفل
-        const lockedServers = serverSettings.lockedServers || [];
-        const isLocked = lockedServers.includes(guild.id);
         
         const serverEmbed = new EmbedBuilder()
             .setColor(isLocked ? 0xe74c3c : (isComplete ? 0x2ecc71 : 0xf39c12))
@@ -943,6 +1014,121 @@ client.on('messageCreate', async (message) => {
         return;
     }
     
+    // أمر clearownerdm - مسح الشات الخاص مع المالك
+    if (command === 'clearownerdm') {
+        const confirmEmbed = new EmbedBuilder()
+            .setColor(0xe74c3c)
+            .setTitle('⚠️ تأكيد مسح الشات الخاص')
+            .setDescription('**هل أنت متأكد من مسح كل رسائل الشات الخاص مع المالك؟**\n\n**سيتم:**\n• حذف كل رسائل البوت في الخاص معك\n• هذه العملية لا يمكن التراجع عنها\n• قد تستغرق بعض الوقت')
+            .setFooter({ text: 'اكتب "تأكيد" خلال 30 ثانية للمتابعة' });
+        
+        const confirmMessage = await message.reply({ embeds: [confirmEmbed] });
+        
+        const filter = m => m.author.id === BOT_OWNER_ID;
+        try {
+            const collected = await message.channel.awaitMessages({ 
+                filter, 
+                max: 1, 
+                time: 30000, 
+                errors: ['time'] 
+            });
+            
+            if (collected.first().content === 'تأكيد') {
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x3498db)
+                            .setTitle('🔄 جاري المسح...')
+                            .setDescription('جاري مسح رسائل الشات الخاص...')
+                            .setFooter({ text: 'قد يستغرق هذا بعض الوقت' })
+                    ]
+                });
+                
+                try {
+                    // الحصول على DM channel مع المالك
+                    const ownerDM = await message.author.createDM();
+                    
+                    // جلب كل الرسائل (بحد 100 رسالة لكل مرة)
+                    let deletedCount = 0;
+                    let hasMore = true;
+                    
+                    while (hasMore) {
+                        const messages = await ownerDM.messages.fetch({ limit: 100 });
+                        
+                        if (messages.size === 0) {
+                            hasMore = false;
+                            break;
+                        }
+                        
+                        // تصفية رسائل البوت فقط
+                        const botMessages = messages.filter(m => m.author.id === client.user.id);
+                        
+                        // حذف الرسائل
+                        for (const msg of botMessages.values()) {
+                            try {
+                                await msg.delete();
+                                deletedCount++;
+                            } catch (error) {
+                                console.log(`❌ لم أستطع حذف رسالة: ${error.message}`);
+                            }
+                        }
+                        
+                        // إذا كان عدد الرسائل أقل من 100، معناه خلصنا
+                        if (messages.size < 100) {
+                            hasMore = false;
+                        }
+                    }
+                    
+                    await confirmMessage.edit({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(0x2ecc71)
+                                .setTitle('✅ تم المسح بنجاح!')
+                                .setDescription(`**تم مسح الشات الخاص مع المالك بنجاح**`)
+                                .addFields({
+                                    name: '📊 النتائج',
+                                    value: `• **عدد الرسائل المحذوفة:** ${deletedCount}\n• **المسح:** رسائل البوت فقط\n• **الحالة:** تم التنظيف بنجاح`
+                                })
+                                .setFooter({ text: 'يمكنك الآن البدء بشات نظيف' })
+                                .setTimestamp()
+                        ]
+                    });
+                    
+                    console.log(`✅ تم مسح ${deletedCount} رسالة من الشات الخاص مع المالك`);
+                    
+                } catch (error) {
+                    await confirmMessage.edit({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(0xe74c3c)
+                                .setTitle('❌ فشل المسح!')
+                                .setDescription(`**حدث خطأ أثناء محاولة مسح الرسائل:**\n\`${error.message}\``)
+                        ]
+                    });
+                }
+            } else {
+                await confirmMessage.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xf39c12)
+                            .setTitle('❌ تم إلغاء العملية')
+                            .setDescription('لم يتم مسح رسائل الشات الخاص.')
+                    ]
+                });
+            }
+        } catch (error) {
+            await confirmMessage.edit({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x95a5a6)
+                        .setTitle('⏰ انتهى الوقت')
+                        .setDescription('لم يتم الرد في الوقت المحدد.')
+                ]
+            });
+        }
+        return;
+    }
+    
     // أمر leave
     if (command === 'leave') {
         const serverId = args[0];
@@ -1127,16 +1313,7 @@ client.on('messageCreate', async (message) => {
         
         const guild = client.guilds.cache.get(serverId);
         
-        if (!guild) {
-            const errorEmbed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle('❌ سيرفر غير موجود')
-                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\`\n\nاستخدم \`!servers\` لرؤية كل السيرفرات`);
-            
-            return message.reply({ embeds: [errorEmbed] });
-        }
-        
-        // إضافة السيرفر للقائمة المغلقة
+        // إضافة السيرفر للقائمة المغلقة حتى لو مش موجود
         if (!serverSettings.lockedServers) serverSettings.lockedServers = [];
         
         if (!serverSettings.lockedServers.includes(serverId)) {
@@ -1147,19 +1324,40 @@ client.on('messageCreate', async (message) => {
         const lockEmbed = new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle('✅ تم قفل البوت في السيرفر')
-            .setDescription(`**تم قفل البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}\n🆔 **المعرف:** \`${guild.id}\`\n👑 **المالك:** <@${guild.ownerId}>\n\nالآن البوت مش هيشتغل في هذا السيرفر.`)
-            .addFields({
-                name: 'ملاحظة',
-                value: 'لإعادة تفعيل البوت في هذا السيرفر، استخدم:\n`!unlock ' + serverId + '`'
-            })
-            .setFooter({ text: `تم القفل بواسطة: ${message.author.tag}` })
-            .setTimestamp();
+            .setDescription(`**تم قفل البوت بنجاح في السيرفر:**`)
+            .addFields(
+                { 
+                    name: '🔐 **حالة القفل**', 
+                    value: `تم إضافة السيرفر للقائمة المقفلة بنجاح.\n\n**معرف السيرفر:** \`${serverId}\``,
+                    inline: false 
+                }
+            );
+        
+        if (guild) {
+            lockEmbed.addFields(
+                { name: '🏠 **السيرفر**', value: guild.name, inline: true },
+                { name: '👑 **المالك**', value: `<@${guild.ownerId}>`, inline: true },
+                { name: '👥 **الأعضاء**', value: guild.memberCount.toLocaleString(), inline: true }
+            );
+            lockEmbed.setDescription(`**تم قفل البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}`);
+        } else {
+            lockEmbed.addFields(
+                { name: '📌 **ملاحظة**', value: 'البوت غير موجود في هذا السيرفر حالياً، لكن تم إضافته للقائمة المقفلة.', inline: false }
+            );
+        }
+        
+        lockEmbed.addFields({
+            name: '💡 **معلومة**',
+            value: 'لإعادة تفعيل البوت في هذا السيرفر، استخدم:\n`!unlock ' + serverId + '`\n\nلعرض قائمة السيرفرات المقفلة: `!locklist`'
+        })
+        .setFooter({ text: `تم القفل بواسطة: ${message.author.tag}` })
+        .setTimestamp();
         
         await message.reply({ embeds: [lockEmbed] });
         return;
     }
     
-    // أمر unlock للسيرفر المحدد
+    // أمر unlock للسيرفر المحدد (حتى لو البوت مش موجود)
     if (command === 'unlock') {
         const serverId = args[0];
         
@@ -1168,26 +1366,19 @@ client.on('messageCreate', async (message) => {
                 .setColor(0xe74c3c)
                 .setTitle('🔓 فتح البوت في سيرفر محدد')
                 .setDescription('**استخدام:**\n`!unlock <ID_السيرفر>`\n\n**مثال:**\n`!unlock 123456789012345678`\n\nلرؤية قائمة السيرفرات: `!servers`')
-                .setFooter({ text: 'هذا الأمر بيفتح البوت في سيرفر محدد فقط' });
+                .setFooter({ text: 'هذا الأمر بيفتح البوت في سيرفر محدد (حتى لو البوت مش موجود)' });
             
             return message.reply({ embeds: [unlockEmbed] });
         }
         
         const guild = client.guilds.cache.get(serverId);
         
-        if (!guild) {
-            const errorEmbed = new EmbedBuilder()
-                .setColor(0xe74c3c)
-                .setTitle('❌ سيرفر غير موجود')
-                .setDescription(`**لا يوجد سيرفر بالـ ID:** \`${serverId}\`\n\nاستخدم \`!servers\` لرؤية كل السيرفرات`);
-            
-            return message.reply({ embeds: [errorEmbed] });
-        }
-        
-        // إزالة السيرفر من القائمة المغلقة
+        // إزالة السيرفر من القائمة المغلقة (حتى لو مش موجود)
         if (!serverSettings.lockedServers) serverSettings.lockedServers = [];
         
-        if (serverSettings.lockedServers.includes(serverId)) {
+        const wasLocked = serverSettings.lockedServers.includes(serverId);
+        
+        if (wasLocked) {
             serverSettings.lockedServers = serverSettings.lockedServers.filter(id => id !== serverId);
             saveSettings(serverSettings);
         }
@@ -1195,9 +1386,26 @@ client.on('messageCreate', async (message) => {
         const unlockEmbed = new EmbedBuilder()
             .setColor(0x2ecc71)
             .setTitle('✅ تم فتح البوت في السيرفر')
-            .setDescription(`**تم فتح البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}\n🆔 **المعرف:** \`${guild.id}\`\n👑 **المالك:** <@${guild.ownerId}>\n\nالآن البوت هيشتغل في هذا السيرفر.`)
-            .setFooter({ text: `تم الفتح بواسطة: ${message.author.tag}` })
-            .setTimestamp();
+            .setDescription(`**تم فتح البوت بنجاح في السيرفر:**`);
+        
+        if (guild) {
+            unlockEmbed.addFields(
+                { name: '🏠 **السيرفر**', value: guild.name, inline: true },
+                { name: '👑 **المالك**', value: `<@${guild.ownerId}>`, inline: true },
+                { name: '👥 **الأعضاء**', value: guild.memberCount.toLocaleString(), inline: true },
+                { name: '🔓 **الحالة**', value: wasLocked ? '✅ تم الفتح' : '⚠️ لم يكن مقفلاً', inline: false }
+            );
+            unlockEmbed.setDescription(`**تم فتح البوت بنجاح في:**\n\n🏠 **السيرفر:** ${guild.name}`);
+        } else {
+            unlockEmbed.addFields(
+                { name: '🔑 **المعرف**', value: `\`${serverId}\``, inline: false },
+                { name: '🔓 **الحالة**', value: wasLocked ? '✅ تم الفتح (البوت غير موجود)' : '⚠️ لم يكن مقفلاً', inline: false },
+                { name: '📌 **ملاحظة**', value: 'البوت غير موجود في هذا السيرفر حالياً، لكن تم إزالته من القائمة المقفلة.', inline: false }
+            );
+        }
+        
+        unlockEmbed.setFooter({ text: `تم الفتح بواسطة: ${message.author.tag}` })
+        .setTimestamp();
         
         await message.reply({ embeds: [unlockEmbed] });
         return;
@@ -1212,15 +1420,15 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 {
                     name: '📊 **أوامر الإحصائيات**',
-                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت الكاملة\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات مع كل التفاصيل\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد`
+                    value: `\`${OWNER_PREFIX}stats\` - إحصائيات البوت الكاملة\n\`${OWNER_PREFIX}servers [صفحة]\` - قائمة السيرفرات مع كل التفاصيل\n\`${OWNER_PREFIX}server <ID>\` - معلومات سيرفر محدد\n\`${OWNER_PREFIX}locklist [صفحة]\` - قائمة السيرفرات المقفلة فقط`
                 },
                 {
                     name: '📢 **أوامر البث والمراسلة**',
-                    value: `\`${OWNER_PREFIX}broadcast <رسالة>\` - إرسال رسالة لجميع المالكين\n\`${OWNER_PREFIX}dm <ID_السيرفر> <رسالة>\` - إرسال رسالة لمالك سيرفر محدد`
+                    value: `\`${OWNER_PREFIX}broadcast <رسالة>\` - إرسال رسالة لجميع المالكين\n\`${OWNER_PREFIX}dm <ID_السيرفر> <رسالة>\` - إرسال رسالة لمالك سيرفر محدد\n\`${OWNER_PREFIX}clearownerdm\` - مسح الشات الخاص مع المالك`
                 },
                 {
                     name: '⚙️ **أوامر التحكم**',
-                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر محدد\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - إخراج البوت من سيرفر\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات سيرفر`
+                    value: `\`${OWNER_PREFIX}lock <ID_السيرفر>\` - قفل البوت في سيرفر محدد (حتى لو البوت مش موجود)\n\`${OWNER_PREFIX}unlock <ID_السيرفر>\` - فتح البوت في سيرفر محدد (حتى لو البوت مش موجود)\n\`${OWNER_PREFIX}leave <ID_السيرفر>\` - إخراج البوت من سيرفر\n\`${OWNER_PREFIX}clearsettings <ID_السيرفر>\` - مسح إعدادات سيرفر`
                 },
                 {
                     name: '👑 **أوامر عامة**',
@@ -1228,8 +1436,8 @@ client.on('messageCreate', async (message) => {
                 }
             )
             .addFields({
-                name: '🔍 **كيف تجيب الـ IDs؟**',
-                value: '1. افتح Settings → Advanced → Developer Mode\n2. كليك يمين على السيرفر/المستخدم → Copy ID'
+                name: '💡 **ملاحظات هامة**',
+                value: '• يمكنك قفل سيرفرات حتى لو البوت مش موجود فيها\n• يمكنك فتح سيرفرات مقفلة حتى لو البوت مش موجود فيها\n• قائمة `!locklist` تظهر كل السيرفرات المقفلة\n• `!clearownerdm` يمسح كل رسائل البوت في الخاص معك'
             })
             .setFooter({ text: `ID المالك: ${BOT_OWNER_ID} | ${client.guilds.cache.size} سيرفر` })
             .setTimestamp();
@@ -1250,7 +1458,7 @@ client.on('interactionCreate', async (interaction) => {
     const lockedServers = serverSettings.lockedServers || [];
     if (lockedServers.includes(guild.id)) {
         return interaction.reply({ 
-            content: '❌ **يجيب تجديد الاشتراك :<**\n\nموقع تجديد الاشتراك: [https://siennaai.pages.dev/](https://discord.gg/1mec)',
+            content: '❌ **يجب تجديد الاشتراك :<**\n\nموقع تجديد الاشتراك: [ https://siennaai.pages.dev/ ]',
             ephemeral: true 
         });
     }
@@ -1956,7 +2164,7 @@ client.on('guildCreate', async (guild) => {
                         new EmbedBuilder()
                             .setColor(0xe74c3c)
                             .setTitle('🔒 البوت غير متاح في سيرفرك')
-                            .setDescription(`**عذراً، البوت مقفل في سيرفرك (${guild.name})**\n\n**سبب القفل:** انتهاء الاشتراك أو مخالفة الشروط\n\n**موقع تجديد الاشتراك:** [https://siennaai.pages.dev/](https://discord.gg/1mec)`)
+                            .setDescription(`**عذراً، البوت مقفل في سيرفرك (${guild.name})**\n\n**سبب القفل:** انتهاء الاشتراك أو مخالفة الشروط\n\n**موقع تجديد الاشتراك:** [https://siennaai.pages.dev/](https://siennaai.pages.dev/)`)
                             .addFields({
                                 name: 'معلومات السيرفر',
                                 value: `• **الاسم:** ${guild.name}\n• **المعرف:** \`${guild.id}\`\n• **الأعضاء:** ${guild.memberCount}`
@@ -2058,7 +2266,7 @@ client.on('guildCreate', async (guild) => {
             const publicEmbed = new EmbedBuilder()
                 .setColor(0xFFFFFF)
                 .setTitle(':> مرحباً بالجميع!')
-                .setDescription(`**تمت إضافة بوت Sienna بنجاح إلى ${guild.name}**Welcome to Sienna Support Bot, your new voice support system!\n\n**للبدء، يجب على الإدارة إعداد النظام باستخدام الأوامر التالية:**`)
+                .setDescription(`**تمت إضافة بوت Sienna بنجاح إلى ${guild.name}`)
                 .addFields({
                     name: '📝 الخطوات الأولية',
                     value: ' استخدم `/help` لعرض الأوامر'
@@ -2082,8 +2290,9 @@ client.on('ready', async () => {
     
     // حساب السيرفرات المقفلة
     const lockedServers = serverSettings.lockedServers || [];
+    const allLockedCount = lockedServers.length;
     const activeLocked = lockedServers.filter(id => client.guilds.cache.has(id)).length;
-    console.log(`🔐 السيرفرات المقفلة: ${activeLocked}`);
+    console.log(`🔐 السيرفرات المقفلة: ${allLockedCount} (${activeLocked} موجودة)`);
     
     // تسجيل الـ Slash Commands
     await registerCommands();
